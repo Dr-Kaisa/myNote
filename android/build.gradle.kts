@@ -5,8 +5,6 @@ allprojects {
                 maven("https://maven.aliyun.com/repository/gradle-plugin")
                 maven("https://maven.aliyun.com/repository/central")
                 maven("https://maven.aliyun.com/repository/apache-snapshots")
-        google()
-        mavenCentral()
     }
 }
 
