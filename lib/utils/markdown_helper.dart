@@ -2,6 +2,7 @@
  * 文件说明：Markdown 文本处理工具文件，负责标题提取、摘要生成和基础编辑操作。
  */
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as path;
 
 /*
  * Markdown 编辑结果模型。
@@ -10,10 +11,7 @@ class MarkdownEditResult {
   /*
    * 构造 Markdown 编辑结果。
    */
-  const MarkdownEditResult({
-    required this.text,
-    required this.selection,
-  });
+  const MarkdownEditResult({required this.text, required this.selection});
 
   /*
    * 编辑后的文本内容。
@@ -74,13 +72,66 @@ String extractNoteTitle(String content) {
  * 从 Markdown 内容中提取摘要文本。
  */
 String extractNotePreview(String content) {
-  final String plainText = stripMarkdownSyntax(content).replaceAll(RegExp(r'\n+'), ' ').trim();
+  final String plainText = stripMarkdownSyntax(
+    content,
+  ).replaceAll(RegExp(r'\n+'), ' ').trim();
 
   if (plainText.isEmpty) {
     return '点击进入后开始记录内容';
   }
 
   return plainText.length > 72 ? plainText.substring(0, 72) : plainText;
+}
+
+/*
+ * 从 Markdown 内容中提取标签列表。
+ */
+List<String> extractNoteTags(String content) {
+  final RegExp tagRegExp = RegExp(r'(^|\s)#([A-Za-z0-9_\-\u4e00-\u9fa5]+)');
+  final Set<String> tags = <String>{};
+
+  for (final RegExpMatch match in tagRegExp.allMatches(content)) {
+    final String? tag = match.group(2);
+    if (tag != null && tag.isNotEmpty) {
+      tags.add(tag);
+    }
+  }
+
+  return tags.toList()..sort();
+}
+
+/*
+ * 将标题转换为适合保存为文件名的文本。
+ */
+String sanitizeFileName(String value) {
+  final String sanitizedValue = value
+      .replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  if (sanitizedValue.isEmpty) {
+    return '未命名笔记';
+  }
+
+  return sanitizedValue.length > 60
+      ? sanitizedValue.substring(0, 60).trim()
+      : sanitizedValue;
+}
+
+/*
+ * 基于标题生成 Markdown 文件名。
+ */
+String createFileNameFromTitle(String title) {
+  return '${sanitizeFileName(title)}.md';
+}
+
+/*
+ * 从相对路径中提取目录部分。
+ */
+String extractDirectoryPath(String relativePath) {
+  final String normalizedPath = relativePath.replaceAll('\\', '/');
+  final String directoryPath = path.posix.dirname(normalizedPath);
+  return directoryPath == '.' ? '' : directoryPath;
 }
 
 /*
@@ -93,10 +144,16 @@ String formatNoteTime(DateTime value) {
 /*
  * 计算当前选择范围所在行的起止位置。
  */
-({int lineStart, int lineEnd}) getLineRange(String text, TextSelection selection) {
+({int lineStart, int lineEnd}) getLineRange(
+  String text,
+  TextSelection selection,
+) {
   final int safeStart = selection.start < 0 ? 0 : selection.start;
   final int safeEnd = selection.end < 0 ? safeStart : selection.end;
-  final int lineStart = text.lastIndexOf('\n', safeStart > 0 ? safeStart - 1 : 0);
+  final int lineStart = text.lastIndexOf(
+    '\n',
+    safeStart > 0 ? safeStart - 1 : 0,
+  );
   final int lineEnd = text.indexOf('\n', safeEnd);
 
   return (
@@ -115,17 +172,27 @@ MarkdownEditResult applyWrapSyntax(
   String suffix,
   String placeholder,
 ) {
-  final String selectedText = selection.isValid ? text.substring(selection.start, selection.end) : '';
+  final String selectedText = selection.isValid
+      ? text.substring(selection.start, selection.end)
+      : '';
   final String targetText = selectedText.isEmpty ? placeholder : selectedText;
   final int start = selection.isValid ? selection.start : text.length;
   final int end = selection.isValid ? selection.end : text.length;
-  final String nextText = text.substring(0, start) + prefix + targetText + suffix + text.substring(end);
+  final String nextText =
+      text.substring(0, start) +
+      prefix +
+      targetText +
+      suffix +
+      text.substring(end);
   final int nextSelectionStart = start + prefix.length;
   final int nextSelectionEnd = nextSelectionStart + targetText.length;
 
   return MarkdownEditResult(
     text: nextText,
-    selection: TextSelection(baseOffset: nextSelectionStart, extentOffset: nextSelectionEnd),
+    selection: TextSelection(
+      baseOffset: nextSelectionStart,
+      extentOffset: nextSelectionEnd,
+    ),
   );
 }
 
@@ -137,11 +204,22 @@ MarkdownEditResult applyLinePrefixSyntax(
   TextSelection selection,
   String prefix,
 ) {
-  final ({int lineStart, int lineEnd}) lineRange = getLineRange(text, selection);
-  final String selectedBlock = text.substring(lineRange.lineStart, lineRange.lineEnd);
+  final ({int lineStart, int lineEnd}) lineRange = getLineRange(
+    text,
+    selection,
+  );
+  final String selectedBlock = text.substring(
+    lineRange.lineStart,
+    lineRange.lineEnd,
+  );
   final List<String> lines = selectedBlock.split('\n');
-  final String nextBlock = lines.map((String line) => '$prefix$line').join('\n');
-  final String nextText = text.substring(0, lineRange.lineStart) + nextBlock + text.substring(lineRange.lineEnd);
+  final String nextBlock = lines
+      .map((String line) => '$prefix$line')
+      .join('\n');
+  final String nextText =
+      text.substring(0, lineRange.lineStart) +
+      nextBlock +
+      text.substring(lineRange.lineEnd);
   final int nextStart = selection.start + prefix.length;
   final int nextEnd = selection.end + prefix.length * lines.length;
 
@@ -150,5 +228,3 @@ MarkdownEditResult applyLinePrefixSyntax(
     selection: TextSelection(baseOffset: nextStart, extentOffset: nextEnd),
   );
 }
-
-

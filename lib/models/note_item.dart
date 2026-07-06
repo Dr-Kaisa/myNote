@@ -12,10 +12,13 @@ class NoteItem {
   const NoteItem({
     required this.id,
     required this.fileName,
+    required this.relativePath,
+    required this.directoryPath,
     required this.title,
     required this.preview,
     required this.content,
     required this.updatedAt,
+    required this.tags,
   });
 
   /*
@@ -27,6 +30,16 @@ class NoteItem {
    * 笔记文件名。
    */
   final String fileName;
+
+  /*
+   * 笔记相对于笔记根目录的路径。
+   */
+  final String relativePath;
+
+  /*
+   * 笔记所在目录相对于笔记根目录的路径。
+   */
+  final String directoryPath;
 
   /*
    * 笔记标题。
@@ -49,25 +62,45 @@ class NoteItem {
   final DateTime updatedAt;
 
   /*
+   * 笔记标签集合。
+   */
+  final List<String> tags;
+
+  /*
+   * 用于界面展示的相对位置文案。
+   */
+  String get displayPath {
+    if (directoryPath.isEmpty) {
+      return title;
+    }
+
+    return '$directoryPath/$title';
+  }
+
+  /*
    * 基于当前实体创建一份更新后的副本。
    */
   NoteItem copyWith({
     String? id,
     String? fileName,
+    String? relativePath,
+    String? directoryPath,
     String? title,
     String? preview,
     String? content,
     DateTime? updatedAt,
+    List<String>? tags,
   }) {
     return NoteItem(
       id: id ?? this.id,
       fileName: fileName ?? this.fileName,
+      relativePath: relativePath ?? this.relativePath,
+      directoryPath: directoryPath ?? this.directoryPath,
       title: title ?? this.title,
       preview: preview ?? this.preview,
       content: content ?? this.content,
       updatedAt: updatedAt ?? this.updatedAt,
+      tags: tags ?? this.tags,
     );
   }
 }
-
-
