@@ -172,6 +172,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Set<String> _selectedItemIds = <String>{};
 
   /*
+   * 当前会话内的文件夹访问次数。
+   */
+  final Map<String, int> _folderVisitCounts = <String, int>{};
+
+  /*
    * 是否处于数据加载中。
    */
   bool _isLoading = true;
@@ -315,20 +320,30 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 获取首页分类集合。
    */
   List<NoteCategoryItem> _buildCategories() {
-    final Set<String> tags = <String>{};
+    final List<String> hotFolderPaths = _folderPaths.toList()
+      ..sort((String left, String right) {
+        final int heatResult = _getFolderHeat(
+          right,
+        ).compareTo(_getFolderHeat(left));
 
-    for (final NoteItem note in _notes) {
-      tags.addAll(note.tags);
-    }
+        if (heatResult != 0) {
+          return heatResult;
+        }
 
-    final List<String> sortedTags = tags.toList()..sort();
+        return left.compareTo(right);
+      });
 
     return <NoteCategoryItem>[
-      const NoteCategoryItem(id: 'all', label: '笔记', isAllNotes: true),
-      ...sortedTags.map(
-        (String tag) =>
-            NoteCategoryItem(id: tag, label: tag, isAllNotes: false),
-      ),
+      const NoteCategoryItem(id: 'all', label: '全部笔记', isAllNotes: true),
+      ...hotFolderPaths
+          .take(8)
+          .map(
+            (String folderPath) => NoteCategoryItem(
+              id: folderPath,
+              label: _getFolderDisplayName(folderPath),
+              isAllNotes: false,
+            ),
+          ),
     ];
   }
 
@@ -336,13 +351,37 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 获取当前分类下展示的笔记列表。
    */
   List<NoteItem> _getVisibleNotes() {
-    if (_activeCategoryId == 'all') {
-      return _notes;
+    return _notes;
+  }
+
+  /*
+   * 获取文件夹分类显示名称。
+   */
+  String _getFolderDisplayName(String folderPath) {
+    if (folderPath.isEmpty) {
+      return '全部笔记';
     }
 
-    return _notes
-        .where((NoteItem note) => note.tags.contains(_activeCategoryId))
-        .toList();
+    return folderPath.split('/').last;
+  }
+
+  /*
+   * 获取文件夹热度值。
+   */
+  int _getFolderHeat(String folderPath) {
+    return (_folderVisitCounts[folderPath] ?? 0) * 1000 +
+        _getFolderNoteCount(folderPath);
+  }
+
+  /*
+   * 增加文件夹访问热度。
+   */
+  void _increaseFolderVisitCount(String folderPath) {
+    if (folderPath.isEmpty) {
+      return;
+    }
+
+    _folderVisitCounts[folderPath] = (_folderVisitCounts[folderPath] ?? 0) + 1;
   }
 
   /*
@@ -438,14 +477,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
         final String nextPath = _activeDirectoryPath.isEmpty
             ? directoryName
             : '$_activeDirectoryPath/$directoryName';
+        final int noteCount = _getFolderNoteCount(nextPath);
         items.add(
           NoteGridItem(
             id: 'folder:$nextPath',
             type: NoteGridItemType.folder,
             title: directoryName,
-            subtitle: '${_getFolderNoteCount(nextPath)}',
+            subtitle: '$noteCount',
             locationText: nextPath,
-            noteCount: _getFolderNoteCount(nextPath),
+            noteCount: noteCount,
           ),
         );
       }
@@ -600,8 +640,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   void _handleCategoryChanged(String categoryId) {
     setState(() {
-      _activeCategoryId = categoryId;
-      _activeDirectoryPath = '';
+      _activeCategoryId = 'all';
+      _activeDirectoryPath = categoryId == 'all' ? '' : categoryId;
+      _increaseFolderVisitCount(_activeDirectoryPath);
       _exitSelectionMode();
     });
   }
@@ -612,6 +653,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
   void _handleDirectoryChanged(String directoryPath) {
     setState(() {
       _activeDirectoryPath = directoryPath;
+      _increaseFolderVisitCount(directoryPath);
       _exitSelectionMode();
     });
   }
@@ -1107,11 +1149,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 构建普通顶部栏区域。
    */
   Widget _buildNormalTopBar({required bool isWideLayout}) {
-    final List<NoteCategoryItem> categories = _buildCategories();
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 22, 28, 0),
       child: Row(
+        // 顶部标题栏横向布局样式
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           if (!isWideLayout && !_isCompactBrowserVisible)
             IconButton(
@@ -1124,48 +1166,51 @@ class _NoteHomePageState extends State<NoteHomePage> {
               color: const Color(0xFF202020),
             ),
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: categories.map((NoteCategoryItem category) {
-                  final bool isActive = _activeCategoryId == category.id;
-                  return GestureDetector(
-                    onTap: () {
-                      _handleCategoryChanged(category.id);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 26),
-                      child: Row(
-                        children: <Widget>[
-                          Text(
-                            category.isAllNotes ? '笔记' : category.label,
-                            // 顶部分类文字样式
-                            style: TextStyle(
-                              color: isActive
-                                  ? const Color(0xFF111111)
-                                  : const Color(0xFF9A9A9A),
-                              fontSize: 34,
-                              fontWeight: isActive
-                                  ? FontWeight.w800
-                                  : FontWeight.w500,
-                            ),
-                          ),
-                          if (category.isAllNotes)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4, top: 4),
-                              child: Icon(
-                                Icons.keyboard_arrow_down_rounded,
-                                color: Color(0xFF111111),
-                                size: 26,
-                              ),
-                            ),
-                        ],
+            child: Column(
+              // 顶部标题区纵向布局样式
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    Text(
+                      '笔记',
+                      // 顶部标题文字样式
+                      style: TextStyle(
+                        color: Color(0xFF111111),
+                        fontSize: 34,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                  );
-                }).toList(),
-              ),
+                    Padding(
+                      padding: EdgeInsets.only(left: 4, top: 4),
+                      child: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: Color(0xFF111111),
+                        size: 26,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${_notes.length}篇笔记',
+                  // 顶部统计文字样式
+                  style: const TextStyle(
+                    color: Color(0xFF666666),
+                    fontSize: 17,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
+          ),
+          IconButton(
+            onPressed: () {
+              _showMessageDialog('搜索', '搜索功能后面再接。');
+            },
+            icon: const Icon(Icons.search_rounded),
+            color: const Color(0xFF111111),
+            iconSize: 34,
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF1F1F1F)),
@@ -1185,6 +1230,105 @@ class _NoteHomePageState extends State<NoteHomePage> {
             },
           ),
         ],
+      ),
+    );
+  }
+
+  /*
+   * 构建分类标签栏。
+   */
+  Widget _buildCategoryBar() {
+    if (_isSelectionMode) {
+      return const SizedBox.shrink();
+    }
+
+    final List<NoteCategoryItem> categories = _buildCategories();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 28, 0, 0),
+      child: SizedBox(
+        height: 58,
+        child: ListView.separated(
+          // 分类栏横向滚动布局样式
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(right: 28),
+          itemCount: categories.length + 1,
+          separatorBuilder: (BuildContext context, int index) {
+            return const SizedBox(width: 10);
+          },
+          itemBuilder: (BuildContext context, int index) {
+            if (index == 0) {
+              return _buildCategoryIconButton();
+            }
+
+            final NoteCategoryItem category = categories[index - 1];
+            final bool isActive = category.isAllNotes
+                ? _activeDirectoryPath.isEmpty
+                : _activeDirectoryPath == category.id;
+
+            return _buildCategoryPill(category: category, isActive: isActive);
+          },
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建分类栏左侧图标按钮。
+   */
+  Widget _buildCategoryIconButton() {
+    return GestureDetector(
+      onTap: () {
+        _handleCategoryChanged('all');
+      },
+      child: Container(
+        width: 72,
+        height: 58,
+        decoration: BoxDecoration(
+          // 分类图标按钮容器样式
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Icon(
+          Icons.folder_open_outlined,
+          color: Color(0xFF111111),
+          size: 30,
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建分类栏文字按钮。
+   */
+  Widget _buildCategoryPill({
+    required NoteCategoryItem category,
+    required bool isActive,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        _handleCategoryChanged(category.id);
+      },
+      child: Container(
+        height: 58,
+        decoration: BoxDecoration(
+          // 分类文字按钮容器样式
+          color: isActive ? const Color(0xFFE1E1E1) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 22),
+        alignment: Alignment.center,
+        child: Text(
+          category.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          // 分类文字按钮文本样式
+          style: const TextStyle(
+            color: Color(0xFF111111),
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
@@ -1243,29 +1387,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return const SizedBox(height: 20);
     }
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
-      child: Container(
-        height: 60,
-        decoration: BoxDecoration(
-          // 搜索栏容器样式
-          color: const Color(0xFFEDEDED),
-          borderRadius: BorderRadius.circular(30),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 22),
-        child: const Row(
-          children: <Widget>[
-            Icon(Icons.search_rounded, color: Color(0xFF8F8F8F), size: 26),
-            SizedBox(width: 14),
-            Text(
-              '搜索笔记',
-              // 搜索栏占位文字样式
-              style: TextStyle(color: Color(0xFF9B9B9B), fontSize: 18),
-            ),
-          ],
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   /*
@@ -1276,38 +1398,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return const SizedBox.shrink();
     }
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 16, 28, 0),
-      child: Container(
-        height: 60,
-        decoration: BoxDecoration(
-          // 统计条容器样式
-          color: const Color(0xFFEDEDED),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                '${_notes.length} 条笔记，${_folderPaths.length} 个文件夹',
-                // 统计条主文字样式
-                style: const TextStyle(
-                  color: Color(0xFF555555),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const Text(
-              '本地 Markdown',
-              // 统计条辅助文字样式
-              style: TextStyle(color: Color(0xFF9A9A9A), fontSize: 15),
-            ),
-          ],
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   /*
@@ -1448,6 +1539,43 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 按当前最短列分配首页浏览区卡片。
+   */
+  List<List<NoteGridItem>> _buildBrowserColumns({
+    required List<NoteGridItem> items,
+    required double itemWidth,
+    required bool isWideLayout,
+  }) {
+    final int columnCount = _getBrowserColumnCount(isWideLayout: isWideLayout);
+    final List<List<NoteGridItem>> columns = List<List<NoteGridItem>>.generate(
+      columnCount,
+      (_) => <NoteGridItem>[],
+    );
+    final List<double> columnHeights = List<double>.filled(columnCount, 0);
+
+    for (final NoteGridItem item in items) {
+      int shortestColumnIndex = 0;
+
+      for (int index = 1; index < columnHeights.length; index += 1) {
+        if (columnHeights[index] < columnHeights[shortestColumnIndex]) {
+          shortestColumnIndex = index;
+        }
+      }
+
+      columns[shortestColumnIndex].add(item);
+      columnHeights[shortestColumnIndex] +=
+          _getBrowserItemHeight(
+            item: item,
+            itemWidth: itemWidth,
+            isWideLayout: isWideLayout,
+          ) +
+          (columns[shortestColumnIndex].length > 1 ? 14 : 0);
+    }
+
+    return columns;
+  }
+
+  /*
    * 构建文件夹卡片。
    */
   Widget _buildFolderCard(NoteGridItem item) {
@@ -1502,7 +1630,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    item.subtitle,
+                    '${item.noteCount}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     // 文件夹数量样式
@@ -1624,6 +1752,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   availableWidth: constraints.maxWidth,
                   isWideLayout: isWideLayout,
                 );
+                final List<List<NoteGridItem>> columns = _buildBrowserColumns(
+                  items: gridItems,
+                  itemWidth: itemWidth,
+                  isWideLayout: isWideLayout,
+                );
 
                 return SingleChildScrollView(
                   padding: EdgeInsets.fromLTRB(
@@ -1632,23 +1765,51 @@ class _NoteHomePageState extends State<NoteHomePage> {
                     28,
                     _isSelectionMode ? 100 : 108,
                   ),
-                  child: Wrap(
-                    // 首页网格自适应换行布局样式
-                    spacing: 14,
-                    runSpacing: 14,
-                    children: gridItems.map((NoteGridItem item) {
-                      return SizedBox(
-                        width: itemWidth,
-                        height: _getBrowserItemHeight(
-                          item: item,
-                          itemWidth: itemWidth,
-                          isWideLayout: isWideLayout,
+                  child: Row(
+                    // 首页瀑布流横向分列布局样式
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      for (
+                        int columnIndex = 0;
+                        columnIndex < columns.length;
+                        columnIndex += 1
+                      ) ...<Widget>[
+                        SizedBox(
+                          width: itemWidth,
+                          child: Column(
+                            // 首页瀑布流纵向贴合布局样式
+                            children: <Widget>[
+                              for (
+                                int itemIndex = 0;
+                                itemIndex < columns[columnIndex].length;
+                                itemIndex += 1
+                              ) ...<Widget>[
+                                if (itemIndex > 0) const SizedBox(height: 14),
+                                SizedBox(
+                                  height: _getBrowserItemHeight(
+                                    item: columns[columnIndex][itemIndex],
+                                    itemWidth: itemWidth,
+                                    isWideLayout: isWideLayout,
+                                  ),
+                                  child:
+                                      columns[columnIndex][itemIndex].type ==
+                                          NoteGridItemType.folder
+                                      ? _buildFolderCard(
+                                          columns[columnIndex][itemIndex],
+                                        )
+                                      : _buildNoteCard(
+                                          columns[columnIndex][itemIndex],
+                                          isWideLayout: isWideLayout,
+                                        ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                        child: item.type == NoteGridItemType.folder
-                            ? _buildFolderCard(item)
-                            : _buildNoteCard(item, isWideLayout: isWideLayout),
-                      );
-                    }).toList(),
+                        if (columnIndex < columns.length - 1)
+                          const SizedBox(width: 14),
+                      ],
+                    ],
                   ),
                 );
               },
@@ -1978,6 +2139,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 : _buildNormalTopBar(isWideLayout: isWideLayout),
             _buildSearchBar(),
             _buildSummaryBar(),
+            _buildCategoryBar(),
             _buildPathBar(),
             _buildBrowserPanel(isWideLayout: isWideLayout),
           ],
