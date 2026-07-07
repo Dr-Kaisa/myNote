@@ -1252,47 +1252,18 @@ class _NoteHomePageState extends State<NoteHomePage> {
           // 分类栏横向滚动布局样式
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.only(right: 28),
-          itemCount: categories.length + 1,
+          itemCount: categories.length,
           separatorBuilder: (BuildContext context, int index) {
             return const SizedBox(width: 10);
           },
           itemBuilder: (BuildContext context, int index) {
-            if (index == 0) {
-              return _buildCategoryIconButton();
-            }
-
-            final NoteCategoryItem category = categories[index - 1];
+            final NoteCategoryItem category = categories[index];
             final bool isActive = category.isAllNotes
                 ? _activeDirectoryPath.isEmpty
                 : _activeDirectoryPath == category.id;
 
             return _buildCategoryPill(category: category, isActive: isActive);
           },
-        ),
-      ),
-    );
-  }
-
-  /*
-   * 构建分类栏左侧图标按钮。
-   */
-  Widget _buildCategoryIconButton() {
-    return GestureDetector(
-      onTap: () {
-        _handleCategoryChanged('all');
-      },
-      child: Container(
-        width: 72,
-        height: 58,
-        decoration: BoxDecoration(
-          // 分类图标按钮容器样式
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Icon(
-          Icons.folder_open_outlined,
-          color: Color(0xFF111111),
-          size: 30,
         ),
       ),
     );
