@@ -364,6 +364,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
   final Map<String, int> _folderVisitCounts = <String, int>{};
 
   /*
+   * 当前会话固定的分类栏文件夹排序。
+   */
+  List<String> _categoryFolderPaths = <String>[];
+
+  /*
    * 当前首页排序方式。
    */
   NoteSortMode _activeSortMode = NoteSortMode.updatedAt;
@@ -437,6 +442,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           ..addAll(appCache.folderVisitCounts);
         _activeSortMode = _getSortModeFromCache(appCache.sortMode);
         _activeViewMode = _getViewModeFromCache(appCache.viewMode);
+        _categoryFolderPaths = _buildCategoryFolderPaths(folderPaths);
         _activeNote = notes.isNotEmpty ? notes.first : null;
         _activeDirectoryPath = '';
         _editorController.text = notes.isNotEmpty ? notes.first.content : '';
@@ -797,22 +803,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 获取首页分类集合。
    */
   List<NoteCategoryItem> _buildCategories() {
-    final List<String> hotFolderPaths = _folderPaths.toList()
-      ..sort((String left, String right) {
-        final int heatResult = _getFolderHeat(
-          right,
-        ).compareTo(_getFolderHeat(left));
-
-        if (heatResult != 0) {
-          return heatResult;
-        }
-
-        return left.compareTo(right);
-      });
-
     return <NoteCategoryItem>[
       const NoteCategoryItem(id: 'all', label: '全部笔记', isAllNotes: true),
-      ...hotFolderPaths
+      ..._categoryFolderPaths
+          .where(_folderPaths.contains)
           .take(8)
           .map(
             (String folderPath) => NoteCategoryItem(
@@ -822,6 +816,23 @@ class _NoteHomePageState extends State<NoteHomePage> {
             ),
           ),
     ];
+  }
+
+  /*
+   * 根据当前缓存热度生成分类栏文件夹排序。
+   */
+  List<String> _buildCategoryFolderPaths(List<String> folderPaths) {
+    return folderPaths.toList()..sort((String left, String right) {
+      final int heatResult = _getFolderHeat(
+        right,
+      ).compareTo(_getFolderHeat(left));
+
+      if (heatResult != 0) {
+        return heatResult;
+      }
+
+      return left.compareTo(right);
+    });
   }
 
   /*
