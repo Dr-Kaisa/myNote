@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:my_note/models/note_item.dart';
+import 'package:my_note/services/app_cache_service.dart';
 import 'package:my_note/services/note_storage_service.dart';
 import 'package:my_note/utils/markdown_helper.dart';
 import 'package:my_note/widgets/markdown_toolbar.dart';
@@ -288,6 +289,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
   final NoteStorageService _noteStorageService = NoteStorageService();
 
   /*
+   * 应用缓存服务实例。
+   */
+  final AppCacheService _appCacheService = AppCacheService();
+
+  /*
    * 编辑器控制器。
    */
   final TextEditingController _editorController = TextEditingController();
@@ -414,6 +420,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
     });
 
     try {
+      final AppCacheData appCache = await _appCacheService.loadCache();
       final List<NoteItem> notes = await _noteStorageService.loadNotes();
       final List<String> folderPaths = await _noteStorageService
           .loadFolderPaths();
@@ -425,6 +432,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       setState(() {
         _notes = notes;
         _folderPaths = folderPaths;
+        _folderVisitCounts
+          ..clear()
+          ..addAll(appCache.folderVisitCounts);
+        _activeSortMode = _getSortModeFromCache(appCache.sortMode);
+        _activeViewMode = _getViewModeFromCache(appCache.viewMode);
         _activeNote = notes.isNotEmpty ? notes.first : null;
         _activeDirectoryPath = '';
         _editorController.text = notes.isNotEmpty ? notes.first.content : '';
@@ -851,6 +863,49 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 根据缓存值获取排序方式。
+   */
+  NoteSortMode _getSortModeFromCache(String sortMode) {
+    for (final NoteSortMode value in NoteSortMode.values) {
+      if (value.name == sortMode) {
+        return value;
+      }
+    }
+
+    return NoteSortMode.updatedAt;
+  }
+
+  /*
+   * 根据缓存值获取视图模式。
+   */
+  NoteViewMode _getViewModeFromCache(String viewMode) {
+    for (final NoteViewMode value in NoteViewMode.values) {
+      if (value.name == viewMode) {
+        return value;
+      }
+    }
+
+    return NoteViewMode.grid;
+  }
+
+  /*
+   * 保存当前应用缓存。
+   */
+  Future<void> _saveAppCache() async {
+    try {
+      await _appCacheService.saveCache(
+        AppCacheData(
+          folderVisitCounts: Map<String, int>.from(_folderVisitCounts),
+          sortMode: _activeSortMode.name,
+          viewMode: _activeViewMode.name,
+        ),
+      );
+    } catch (error) {
+      // 缓存失败不影响笔记读写，后续操作会继续尝试保存。
+    }
+  }
+
+  /*
    * 获取菜单里需要展示的相反视图模式文案。
    */
   String _getOppositeViewModeLabel() {
@@ -873,6 +928,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
     setState(() {
       _activeSortMode = sortMode;
     });
+    unawaited(_saveAppCache());
   }
 
   /*
@@ -884,6 +940,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           ? NoteViewMode.list
           : NoteViewMode.grid;
     });
+    unawaited(_saveAppCache());
   }
 
   /*
@@ -1074,6 +1131,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
     }
 
     _folderVisitCounts[folderPath] = (_folderVisitCounts[folderPath] ?? 0) + 1;
+    unawaited(_saveAppCache());
   }
 
   /*
