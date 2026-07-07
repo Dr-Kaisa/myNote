@@ -309,6 +309,16 @@ class _NoteHomePageState extends State<NoteHomePage> {
   final GlobalKey _moreMenuButtonKey = GlobalKey();
 
   /*
+   * 首页面板定位标识。
+   */
+  final GlobalKey _homePanelKey = GlobalKey();
+
+  /*
+   * 浏览项定位标识集合。
+   */
+  final Map<String, GlobalKey> _browserItemKeys = <String, GlobalKey>{};
+
+  /*
    * 当前更多菜单浮层。
    */
   OverlayEntry? _moreMenuOverlayEntry;
@@ -357,6 +367,26 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 当前选中的网格项标识集合。
    */
   Set<String> _selectedItemIds = <String>{};
+
+  /*
+   * 当前正在拖动的浏览项。
+   */
+  NoteGridItem? _draggingBrowserItem;
+
+  /*
+   * 当前拖动预览在首页面板内的位置。
+   */
+  Offset? _dragPreviewLocalTopLeft;
+
+  /*
+   * 当前拖动预览尺寸。
+   */
+  Size _dragPreviewSize = Size.zero;
+
+  /*
+   * 当前拖动命中的目标浏览项标识。
+   */
+  String? _dragHoverItemId;
 
   /*
    * 当前会话内的文件夹访问次数。
@@ -1624,21 +1654,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
-   * 进入选择模式。
-   */
-  void _enterSelectionMode(String itemId) {
-    setState(() {
-      _isSelectionMode = true;
-      _selectedItemIds = <String>{itemId};
-    });
-  }
-
-  /*
    * 退出选择模式。
    */
   void _exitSelectionMode() {
     _isSelectionMode = false;
     _selectedItemIds = <String>{};
+    _draggingBrowserItem = null;
+    _dragPreviewLocalTopLeft = null;
+    _dragPreviewSize = Size.zero;
+    _dragHoverItemId = null;
   }
 
   /*
@@ -1656,6 +1680,142 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
       _selectedItemIds = nextSelectedItemIds;
       _isSelectionMode = nextSelectedItemIds.isNotEmpty;
+    });
+  }
+
+  /*
+   * 获取浏览项定位标识。
+   */
+  GlobalKey _getBrowserItemKey(String itemId) {
+    return _browserItemKeys.putIfAbsent(itemId, GlobalKey.new);
+  }
+
+  /*
+   * 将全局坐标转换为首页面板内坐标。
+   */
+  Offset _getHomePanelLocalPosition(Offset globalPosition) {
+    final BuildContext? homePanelContext = _homePanelKey.currentContext;
+
+    if (homePanelContext == null) {
+      return globalPosition;
+    }
+
+    final RenderObject? renderObject = homePanelContext.findRenderObject();
+
+    if (renderObject is! RenderBox) {
+      return globalPosition;
+    }
+
+    return renderObject.globalToLocal(globalPosition);
+  }
+
+  /*
+   * 获取浏览项中心点在首页面板内的位置。
+   */
+  Offset? _getBrowserItemCenterInHomePanel(String itemId) {
+    final BuildContext? itemContext = _browserItemKeys[itemId]?.currentContext;
+    final BuildContext? homePanelContext = _homePanelKey.currentContext;
+
+    if (itemContext == null || homePanelContext == null) {
+      return null;
+    }
+
+    final RenderObject? itemRenderObject = itemContext.findRenderObject();
+    final RenderObject? homePanelRenderObject = homePanelContext
+        .findRenderObject();
+
+    if (itemRenderObject is! RenderBox || homePanelRenderObject is! RenderBox) {
+      return null;
+    }
+
+    final Offset globalCenter = itemRenderObject.localToGlobal(
+      itemRenderObject.size.center(Offset.zero),
+    );
+    return homePanelRenderObject.globalToLocal(globalCenter);
+  }
+
+  /*
+   * 根据拖动矩形查找当前命中的浏览项。
+   */
+  String? _findDragHoverItemId(Rect dragRect) {
+    for (final String itemId in _browserItemKeys.keys) {
+      if (itemId == _draggingBrowserItem?.id) {
+        continue;
+      }
+
+      final Offset? itemCenter = _getBrowserItemCenterInHomePanel(itemId);
+
+      if (itemCenter != null && dragRect.contains(itemCenter)) {
+        return itemId;
+      }
+    }
+
+    return null;
+  }
+
+  /*
+   * 开始拖动浏览项。
+   */
+  void _startDraggingBrowserItem(NoteGridItem item, Offset globalPosition) {
+    final BuildContext? itemContext = _getBrowserItemKey(
+      item.id,
+    ).currentContext;
+    Size itemSize = const Size(180, 140);
+
+    if (itemContext != null) {
+      final RenderObject? itemRenderObject = itemContext.findRenderObject();
+
+      if (itemRenderObject is RenderBox) {
+        itemSize = itemRenderObject.size;
+      }
+    }
+
+    final Offset localPosition = _getHomePanelLocalPosition(globalPosition);
+    final Offset previewTopLeft = localPosition - itemSize.center(Offset.zero);
+    final Rect dragRect = previewTopLeft & itemSize;
+
+    setState(() {
+      _isSelectionMode = true;
+      _selectedItemIds = <String>{item.id};
+      _draggingBrowserItem = item;
+      _dragPreviewSize = itemSize;
+      _dragPreviewLocalTopLeft = previewTopLeft;
+      _dragHoverItemId = _findDragHoverItemId(dragRect);
+    });
+  }
+
+  /*
+   * 更新拖动浏览项位置。
+   */
+  void _updateDraggingBrowserItem(Offset globalPosition) {
+    if (_draggingBrowserItem == null || _dragPreviewSize == Size.zero) {
+      return;
+    }
+
+    final Offset localPosition = _getHomePanelLocalPosition(globalPosition);
+    final Offset previewTopLeft =
+        localPosition - _dragPreviewSize.center(Offset.zero);
+    final Rect dragRect = previewTopLeft & _dragPreviewSize;
+
+    setState(() {
+      _dragPreviewLocalTopLeft = previewTopLeft;
+      _dragHoverItemId = _findDragHoverItemId(dragRect);
+    });
+  }
+
+  /*
+   * 结束拖动浏览项。
+   */
+  void _finishDraggingBrowserItem() {
+    if (_draggingBrowserItem == null) {
+      return;
+    }
+
+    setState(() {
+      _draggingBrowserItem = null;
+      _dragPreviewLocalTopLeft = null;
+      _dragPreviewSize = Size.zero;
+      _dragHoverItemId = null;
     });
   }
 
@@ -2257,6 +2417,191 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 构建浏览项动画外壳。
+   */
+  Widget _buildBrowserItemShell({
+    required NoteGridItem item,
+    required Widget child,
+    double borderRadius = 24,
+  }) {
+    final bool isHoverTarget = _dragHoverItemId == item.id;
+    final bool isDraggingItem = _draggingBrowserItem?.id == item.id;
+
+    return AnimatedOpacity(
+      opacity: isDraggingItem ? 0 : 1,
+      duration: const Duration(milliseconds: 90),
+      curve: Curves.easeOutCubic,
+      child: AnimatedScale(
+        scale: isHoverTarget ? 0.96 : 1,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        child: AnimatedContainer(
+          key: _getBrowserItemKey(item.id),
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          foregroundDecoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(borderRadius),
+            border: Border.all(
+              color: isHoverTarget
+                  ? const Color(0xFFFFC000)
+                  : Colors.transparent,
+              width: 3,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建拖动中的文件夹预览。
+   */
+  Widget _buildDraggingFolderPreview(NoteGridItem item) {
+    return Container(
+      // 拖动文件夹预览容器样式
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x26000000),
+            blurRadius: 24,
+            offset: Offset(0, 12),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      child: Row(
+        // 拖动文件夹预览横向布局样式
+        children: <Widget>[
+          _buildFolderIcon(size: 50),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              // 拖动文件夹预览文字纵向布局样式
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  // 拖动文件夹预览标题样式
+                  style: const TextStyle(
+                    color: Color(0xFF111111),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${item.noteCount}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  // 拖动文件夹预览数量样式
+                  style: const TextStyle(
+                    color: Color(0xFF888888),
+                    fontSize: 17,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /*
+   * 构建拖动中的笔记预览。
+   */
+  Widget _buildDraggingNotePreview(NoteGridItem item) {
+    final NoteItem note = item.note!;
+
+    return Container(
+      // 拖动笔记预览容器样式
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const <BoxShadow>[
+          BoxShadow(
+            color: Color(0x26000000),
+            blurRadius: 24,
+            offset: Offset(0, 12),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+      child: Column(
+        // 拖动笔记预览纵向布局样式
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            note.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            // 拖动笔记预览标题样式
+            style: const TextStyle(
+              color: Color(0xFF111111),
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            note.preview,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            // 拖动笔记预览摘要样式
+            style: const TextStyle(
+              color: Color(0xFF666666),
+              fontSize: 16,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _formatNoteCardDate(note.updatedAt),
+            // 拖动笔记预览日期样式
+            style: const TextStyle(color: Color(0xFF9B9B9B), fontSize: 15),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /*
+   * 构建拖动中的浏览项预览。
+   */
+  Widget _buildDraggingBrowserPreview() {
+    final NoteGridItem? item = _draggingBrowserItem;
+    final Offset? topLeft = _dragPreviewLocalTopLeft;
+
+    if (item == null || topLeft == null || _dragPreviewSize == Size.zero) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      left: topLeft.dx,
+      top: topLeft.dy,
+      width: _dragPreviewSize.width,
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: 0.94,
+          child: Transform.scale(
+            scale: 1.02,
+            child: item.type == NoteGridItemType.folder
+                ? _buildDraggingFolderPreview(item)
+                : _buildDraggingNotePreview(item),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
    * 获取首页浏览区列数。
    */
   int _getBrowserColumnCount({required bool isWideLayout}) {
@@ -2351,8 +2696,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
         _handleDirectoryChanged(item.locationText);
       },
-      onLongPress: () {
-        _enterSelectionMode(item.id);
+      onLongPressStart: (LongPressStartDetails details) {
+        _startDraggingBrowserItem(item, details.globalPosition);
+      },
+      onLongPressMoveUpdate: (LongPressMoveUpdateDetails details) {
+        _updateDraggingBrowserItem(details.globalPosition);
+      },
+      onLongPressEnd: (_) {
+        _finishDraggingBrowserItem();
+      },
+      onLongPressCancel: () {
+        _finishDraggingBrowserItem();
       },
       child: Container(
         // 文件夹卡片容器样式
@@ -2421,8 +2775,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
       onTap: () {
         _handleSelectNote(note, isWideLayout: isWideLayout);
       },
-      onLongPress: () {
-        _enterSelectionMode(item.id);
+      onLongPressStart: (LongPressStartDetails details) {
+        _startDraggingBrowserItem(item, details.globalPosition);
+      },
+      onLongPressMoveUpdate: (LongPressMoveUpdateDetails details) {
+        _updateDraggingBrowserItem(details.globalPosition);
+      },
+      onLongPressEnd: (_) {
+        _finishDraggingBrowserItem();
+      },
+      onLongPressCancel: () {
+        _finishDraggingBrowserItem();
       },
       child: Container(
         // 笔记卡片容器样式
@@ -2508,8 +2871,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
         _handleDirectoryChanged(item.locationText);
       },
-      onLongPress: () {
-        _enterSelectionMode(item.id);
+      onLongPressStart: (LongPressStartDetails details) {
+        _startDraggingBrowserItem(item, details.globalPosition);
+      },
+      onLongPressMoveUpdate: (LongPressMoveUpdateDetails details) {
+        _updateDraggingBrowserItem(details.globalPosition);
+      },
+      onLongPressEnd: (_) {
+        _finishDraggingBrowserItem();
+      },
+      onLongPressCancel: () {
+        _finishDraggingBrowserItem();
       },
       child: Container(
         // 文件夹列表行容器样式
@@ -2578,8 +2950,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
       onTap: () {
         _handleSelectNote(note, isWideLayout: isWideLayout);
       },
-      onLongPress: () {
-        _enterSelectionMode(item.id);
+      onLongPressStart: (LongPressStartDetails details) {
+        _startDraggingBrowserItem(item, details.globalPosition);
+      },
+      onLongPressMoveUpdate: (LongPressMoveUpdateDetails details) {
+        _updateDraggingBrowserItem(details.globalPosition);
+      },
+      onLongPressEnd: (_) {
+        _finishDraggingBrowserItem();
+      },
+      onLongPressCancel: () {
+        _finishDraggingBrowserItem();
       },
       child: Container(
         // 笔记列表行容器样式
@@ -2670,10 +3051,18 @@ class _NoteHomePageState extends State<NoteHomePage> {
         final NoteGridItem item = items[index];
 
         if (item.type == NoteGridItemType.folder) {
-          return _buildFolderListRow(item);
+          return _buildBrowserItemShell(
+            item: item,
+            borderRadius: 18,
+            child: _buildFolderListRow(item),
+          );
         }
 
-        return _buildNoteListRow(item, isWideLayout: isWideLayout);
+        return _buildBrowserItemShell(
+          item: item,
+          borderRadius: 18,
+          child: _buildNoteListRow(item, isWideLayout: isWideLayout),
+        );
       },
     );
   }
@@ -2734,15 +3123,19 @@ class _NoteHomePageState extends State<NoteHomePage> {
                                 itemIndex += 1
                               ) ...<Widget>[
                                 if (itemIndex > 0) const SizedBox(height: 14),
-                                columns[columnIndex][itemIndex].type ==
-                                        NoteGridItemType.folder
-                                    ? _buildFolderCard(
-                                        columns[columnIndex][itemIndex],
-                                      )
-                                    : _buildNoteCard(
-                                        columns[columnIndex][itemIndex],
-                                        isWideLayout: isWideLayout,
-                                      ),
+                                _buildBrowserItemShell(
+                                  item: columns[columnIndex][itemIndex],
+                                  child:
+                                      columns[columnIndex][itemIndex].type ==
+                                          NoteGridItemType.folder
+                                      ? _buildFolderCard(
+                                          columns[columnIndex][itemIndex],
+                                        )
+                                      : _buildNoteCard(
+                                          columns[columnIndex][itemIndex],
+                                          isWideLayout: isWideLayout,
+                                        ),
+                                ),
                               ],
                             ],
                           ),
@@ -3070,6 +3463,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildHomePanel({required bool isWideLayout}) {
     return Stack(
+      key: _homePanelKey,
       children: <Widget>[
         Column(
           // 首页内容纵向布局样式，顶部栏和下方内容分开控制边距。
@@ -3097,6 +3491,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             ),
           ],
         ),
+        _buildDraggingBrowserPreview(),
         _buildSelectionActionBar(),
       ],
     );
