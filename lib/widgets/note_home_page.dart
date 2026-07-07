@@ -1188,7 +1188,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildNormalTopBar({required bool isWideLayout}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 22, 28, 0),
+      // 顶部栏只保留上下间距，左右对齐交给首页根容器统一控制。
+      padding: const EdgeInsets.fromLTRB(0, 22, 0, 0),
       child: Row(
         // 顶部标题栏横向布局样式
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1242,30 +1243,52 @@ class _NoteHomePageState extends State<NoteHomePage> {
               ],
             ),
           ),
-          IconButton(
-            onPressed: () {
-              _showMessageDialog('搜索', '搜索功能后面再接。');
-            },
-            icon: const Icon(Icons.search_rounded),
-            color: const Color(0xFF111111),
-            iconSize: 34,
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded, color: Color(0xFF1F1F1F)),
-            onSelected: (String value) {
-              if (value == 'note') {
-                _handleCreateNote(isWideLayout: isWideLayout);
-              }
-              if (value == 'folder') {
-                _handleCreateFolder();
-              }
-            },
-            itemBuilder: (BuildContext menuContext) {
-              return const <PopupMenuEntry<String>>[
-                PopupMenuItem<String>(value: 'note', child: Text('新建笔记')),
-                PopupMenuItem<String>(value: 'folder', child: Text('新建文件夹')),
-              ];
-            },
+          Row(
+            // 顶部右侧操作按钮横向布局样式，只占搜索和更多按钮本身需要的宽度。
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              IconButton(
+                onPressed: () {
+                  _showMessageDialog('搜索', '搜索功能后面再接。');
+                },
+                icon: const Icon(Icons.search_rounded),
+                color: const Color(0xFF111111),
+                iconSize: 34,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 44,
+                  height: 44,
+                ),
+              ),
+              PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 28,
+                  height: 44,
+                ),
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  color: Color(0xFF1F1F1F),
+                ),
+                onSelected: (String value) {
+                  if (value == 'note') {
+                    _handleCreateNote(isWideLayout: isWideLayout);
+                  }
+                  if (value == 'folder') {
+                    _handleCreateFolder();
+                  }
+                },
+                itemBuilder: (BuildContext menuContext) {
+                  return const <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(value: 'note', child: Text('新建笔记')),
+                    PopupMenuItem<String>(
+                      value: 'folder',
+                      child: Text('新建文件夹'),
+                    ),
+                  ];
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -1290,8 +1313,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
     final List<NoteCategoryItem> categories = _buildCategories();
 
     return Padding(
-      // 分类栏外层留白：左侧 28 对齐页面内容，上方 28 拉开标题区，右侧交给滚动列表内部处理。
-      padding: const EdgeInsets.fromLTRB(28, 28, 0, 0),
+      // 分类栏只保留上方间距，左右对齐交给首页根容器统一控制。
+      padding: const EdgeInsets.only(top: 28),
       child: SizedBox(
         // 固定分类栏高度，防止标签内容或字体变化导致首页布局上下跳动。
         height: 48,
@@ -1299,8 +1322,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
           // 分类栏横向滚动布局样式
           // 横向滚动用于容纳多个常访问文件夹，窄屏时不会把标签挤压变形。
           scrollDirection: Axis.horizontal,
-          // 右侧补 28 间距，保证最后一个标签滑到末尾时不会贴住屏幕边缘。
-          padding: const EdgeInsets.only(right: 28),
+          // 右侧不再单独补边距，末尾对齐交给首页根容器统一控制。
+          padding: EdgeInsets.zero,
           // 列表项数量完全由 categories 决定，避免手写额外项导致索引错位。
           itemCount: categories.length,
           // 每两个分类标签之间固定 10 像素间距，保持图二那种胶囊按钮间隔。
@@ -1365,7 +1388,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildSelectionTopBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 22, 22, 0),
+      // 选择模式顶部栏只保留上方间距，左右对齐交给首页根容器统一控制。
+      padding: const EdgeInsets.fromLTRB(0, 22, 0, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -1434,7 +1458,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Widget _buildPathBar() {
     if (_activeCategoryId != 'all') {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(30, 14, 30, 0),
+        // 标签路径栏只保留上方间距，左右对齐交给首页根容器统一控制。
+        padding: const EdgeInsets.only(top: 14),
         child: Text(
           '#$_activeCategoryId',
           // 标签路径栏样式
@@ -1450,7 +1475,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(30, 14, 30, 0),
+      // 面包屑路径栏只保留上方间距，左右对齐交给首页根容器统一控制。
+      padding: const EdgeInsets.only(top: 14),
       child: Wrap(
         // 路径栏流式布局样式
         crossAxisAlignment: WrapCrossAlignment.center,
@@ -1540,7 +1566,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
     required double availableWidth,
     required bool isWideLayout,
   }) {
-    const double horizontalPadding = 56;
+    // 首页根容器已经统一处理左右边距，这里只需要扣掉列间距。
+    const double horizontalPadding = 0;
     const double itemSpacing = 14;
     final int columnCount = _getBrowserColumnCount(isWideLayout: isWideLayout);
 
@@ -1790,9 +1817,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
                 return SingleChildScrollView(
                   padding: EdgeInsets.fromLTRB(
-                    28,
+                    0,
                     _isSelectionMode ? 0 : 18,
-                    28,
+                    0,
                     _isSelectionMode ? 100 : 108,
                   ),
                   child: Row(
@@ -2160,19 +2187,23 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Widget _buildHomePanel({required bool isWideLayout}) {
     return Stack(
       children: <Widget>[
-        Column(
-          // 首页内容纵向布局样式
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            _isSelectionMode
-                ? _buildSelectionTopBar()
-                : _buildNormalTopBar(isWideLayout: isWideLayout),
-            _buildSearchBar(),
-            _buildSummaryBar(),
-            _buildCategoryBar(),
-            _buildPathBar(),
-            _buildBrowserPanel(isWideLayout: isWideLayout),
-          ],
+        Padding(
+          // 首页根容器左右边距样式，统一控制标题、分类栏、路径栏和卡片列表的水平对齐。
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            // 首页内容纵向布局样式
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              _isSelectionMode
+                  ? _buildSelectionTopBar()
+                  : _buildNormalTopBar(isWideLayout: isWideLayout),
+              _buildSearchBar(),
+              _buildSummaryBar(),
+              _buildCategoryBar(),
+              _buildPathBar(),
+              _buildBrowserPanel(isWideLayout: isWideLayout),
+            ],
+          ),
         ),
         _buildSelectionActionBar(),
       ],
