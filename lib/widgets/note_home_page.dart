@@ -914,6 +914,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 格式化首页笔记卡片日期。
+   */
+  String _formatNoteCardDate(DateTime dateTime) {
+    return '${dateTime.year}/${dateTime.month}/${dateTime.day}';
+  }
+
+  /*
    * 构造直接子目录的完整相对路径。
    */
   String _buildChildDirectoryPath(
@@ -2298,12 +2305,12 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 children: <Widget>[
                   Text(
                     folderTitle,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     // 文件夹标题样式
                     style: const TextStyle(
                       color: Color(0xFF111111),
-                      fontSize: 20,
+                      fontSize: 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -2364,32 +2371,30 @@ class _NoteHomePageState extends State<NoteHomePage> {
               children: <Widget>[
                 Text(
                   note.title,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   // 笔记卡片标题样式
                   style: const TextStyle(
                     color: Color(0xFF111111),
-                    fontSize: 21,
+                    fontSize: 18,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
                 const SizedBox(height: 16),
-                Expanded(
-                  child: Text(
-                    note.preview,
-                    maxLines: 5,
-                    overflow: TextOverflow.ellipsis,
-                    // 笔记卡片摘要样式
-                    style: const TextStyle(
-                      color: Color(0xFF666666),
-                      fontSize: 18,
-                      height: 1.5,
-                    ),
+                Text(
+                  note.preview,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  // 笔记卡片摘要样式
+                  style: const TextStyle(
+                    color: Color(0xFF666666),
+                    fontSize: 16,
+                    height: 1.5,
                   ),
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  '${note.updatedAt.month}月${note.updatedAt.day}日',
+                  _formatNoteCardDate(note.updatedAt),
                   // 笔记卡片日期样式
                   style: const TextStyle(
                     color: Color(0xFF9B9B9B),
@@ -2548,7 +2553,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '${note.updatedAt.month}月${note.updatedAt.day}日',
+                    _formatNoteCardDate(note.updatedAt),
                     // 笔记列表日期样式
                     style: const TextStyle(
                       color: Color(0xFF9B9B9B),
@@ -2654,23 +2659,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
                                 itemIndex += 1
                               ) ...<Widget>[
                                 if (itemIndex > 0) const SizedBox(height: 14),
-                                SizedBox(
-                                  height: _getBrowserItemHeight(
-                                    item: columns[columnIndex][itemIndex],
-                                    itemWidth: itemWidth,
-                                    isWideLayout: isWideLayout,
-                                  ),
-                                  child:
-                                      columns[columnIndex][itemIndex].type ==
-                                          NoteGridItemType.folder
-                                      ? _buildFolderCard(
-                                          columns[columnIndex][itemIndex],
-                                        )
-                                      : _buildNoteCard(
-                                          columns[columnIndex][itemIndex],
-                                          isWideLayout: isWideLayout,
-                                        ),
-                                ),
+                                columns[columnIndex][itemIndex].type ==
+                                        NoteGridItemType.folder
+                                    ? _buildFolderCard(
+                                        columns[columnIndex][itemIndex],
+                                      )
+                                    : _buildNoteCard(
+                                        columns[columnIndex][itemIndex],
+                                        isWideLayout: isWideLayout,
+                                      ),
                               ],
                             ],
                           ),
