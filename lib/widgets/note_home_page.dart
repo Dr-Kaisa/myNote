@@ -2347,8 +2347,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildSelectionCircle(bool isSelected) {
     return Container(
-      width: 30,
-      height: 30,
+      width: 22,
+      height: 22,
       decoration: BoxDecoration(
         // 选择圆点容器样式
         color: isSelected ? const Color(0xFFFFC000) : const Color(0xFFF3F3F3),
@@ -2356,7 +2356,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         border: Border.all(color: const Color(0xFFE1E1E1)),
       ),
       child: isSelected
-          ? const Icon(Icons.check_rounded, color: Colors.white, size: 22)
+          ? const Icon(Icons.check_rounded, color: Colors.white, size: 15)
           : null,
     );
   }
@@ -2573,7 +2573,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }) {
     // 首页根容器已经统一处理左右边距，这里只需要扣掉列间距。
     const double horizontalPadding = 0;
-    const double itemSpacing = 14;
+    const double itemSpacing = 10;
     final int columnCount = _getBrowserColumnCount(isWideLayout: isWideLayout);
 
     return (availableWidth -
@@ -3107,7 +3107,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                           ),
                         ),
                         if (columnIndex < columns.length - 1)
-                          const SizedBox(width: 14),
+                          const SizedBox(width: 8),
                       ],
                     ],
                   ),
@@ -3439,7 +3439,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             Expanded(
               child: Padding(
                 // 首页下方根容器左右边距样式，只控制分类栏、路径栏和卡片列表。
-                padding: const EdgeInsets.symmetric(horizontal: 28),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Column(
                   // 首页下方内容纵向布局样式
                   crossAxisAlignment: CrossAxisAlignment.start,
