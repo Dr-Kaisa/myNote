@@ -1253,22 +1253,27 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 },
                 icon: const Icon(Icons.search_rounded),
                 color: const Color(0xFF111111),
-                iconSize: 34,
+                iconSize: 30,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints.tightFor(
-                  width: 44,
+                  width: 84,
                   height: 44,
                 ),
               ),
               PopupMenuButton<String>(
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(
+                child: const SizedBox(
+                  // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
                   width: 28,
                   height: 44,
-                ),
-                icon: const Icon(
-                  Icons.more_vert_rounded,
-                  color: Color(0xFF1F1F1F),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Icon(
+                      Icons.more_vert_rounded,
+                      color: Color(0xFF1F1F1F),
+                      size: 22,
+                    ),
+                  ),
                 ),
                 onSelected: (String value) {
                   if (value == 'note') {
