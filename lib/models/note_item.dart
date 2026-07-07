@@ -26,6 +26,7 @@ class NoteItem {
     required this.title,
     required this.preview,
     required this.content,
+    required this.createdAt,
     required this.updatedAt,
     required this.tags,
   });
@@ -80,6 +81,13 @@ class NoteItem {
   final String content;
 
   /*
+   * 创建时间。
+   *
+   * 来自文件系统可用的创建或状态变更时间，用于首页按创建时间排序。
+   */
+  final DateTime createdAt;
+
+  /*
    * 最后更新时间。
    *
    * 来自文件系统的修改时间，用于排序和显示日期。
@@ -120,6 +128,7 @@ class NoteItem {
     String? title,
     String? preview,
     String? content,
+    DateTime? createdAt,
     DateTime? updatedAt,
     List<String>? tags,
   }) {
@@ -132,6 +141,7 @@ class NoteItem {
       title: title ?? this.title,
       preview: preview ?? this.preview,
       content: content ?? this.content,
+      createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       tags: tags ?? this.tags,
     );

@@ -65,6 +65,13 @@ class NoteCategoryItem {
 enum NoteGridItemType { folder, note }
 
 /*
+ * 首页排序方式。
+ *
+ * 右上角更多菜单会切换这个值，首页文件夹和笔记都根据它重新排序。
+ */
+enum NoteSortMode { name, createdAt, updatedAt }
+
+/*
  * 首页网格项数据模型。
  *
  * NoteGridItem 是给首页瀑布流用的数据。
@@ -170,6 +177,21 @@ class _NoteHomePageState extends State<NoteHomePage> {
   final FocusNode _editorFocusNode = FocusNode();
 
   /*
+   * 更多菜单按钮定位标识。
+   */
+  final GlobalKey _moreMenuButtonKey = GlobalKey();
+
+  /*
+   * 当前更多菜单浮层。
+   */
+  OverlayEntry? _moreMenuOverlayEntry;
+
+  /*
+   * 更多菜单是否正在执行关闭动画。
+   */
+  bool _isMoreMenuClosing = false;
+
+  /*
    * 当前全部笔记列表。
    */
   List<NoteItem> _notes = <NoteItem>[];
@@ -215,6 +237,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
   final Map<String, int> _folderVisitCounts = <String, int>{};
 
   /*
+   * 当前首页排序方式。
+   */
+  NoteSortMode _activeSortMode = NoteSortMode.updatedAt;
+
+  /*
    * 是否处于数据加载中。
    */
   bool _isLoading = true;
@@ -245,6 +272,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _hideMoreMenu(animate: false);
     _editorController.removeListener(_handleEditorTextChanged);
     _editorController.dispose();
     _editorFocusNode.dispose();
@@ -355,6 +383,261 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 隐藏更多菜单浮层。
+   */
+  void _hideMoreMenu({bool animate = true, VoidCallback? onHidden}) {
+    final OverlayEntry? overlayEntry = _moreMenuOverlayEntry;
+
+    if (overlayEntry == null) {
+      onHidden?.call();
+      return;
+    }
+
+    if (!animate) {
+      overlayEntry.remove();
+      _moreMenuOverlayEntry = null;
+      _isMoreMenuClosing = false;
+      onHidden?.call();
+      return;
+    }
+
+    if (_isMoreMenuClosing) {
+      return;
+    }
+
+    _isMoreMenuClosing = true;
+    overlayEntry.markNeedsBuild();
+
+    Future<void>.delayed(const Duration(milliseconds: 160), () {
+      if (_moreMenuOverlayEntry != overlayEntry) {
+        return;
+      }
+
+      overlayEntry.remove();
+      _moreMenuOverlayEntry = null;
+      _isMoreMenuClosing = false;
+      onHidden?.call();
+    });
+  }
+
+  /*
+   * 展示右上角更多菜单。
+   */
+  void _showMoreMenu({required bool isWideLayout}) {
+    if (_moreMenuOverlayEntry != null) {
+      _hideMoreMenu();
+      return;
+    }
+
+    final BuildContext? buttonContext = _moreMenuButtonKey.currentContext;
+
+    if (buttonContext == null) {
+      return;
+    }
+
+    final RenderBox buttonBox = buttonContext.findRenderObject() as RenderBox;
+    final Offset buttonOffset = buttonBox.localToGlobal(Offset.zero);
+    final Size buttonSize = buttonBox.size;
+    final Size screenSize = MediaQuery.of(context).size;
+    final double menuWidth = screenSize.width < 248
+        ? screenSize.width - 24
+        : 224;
+    final double menuLeft = (buttonOffset.dx + buttonSize.width - menuWidth)
+        .clamp(12.0, screenSize.width - menuWidth - 12.0)
+        .toDouble();
+    final double menuTop = (buttonOffset.dy + buttonSize.height + 8)
+        .clamp(12.0, screenSize.height - 12.0)
+        .toDouble();
+
+    _isMoreMenuClosing = false;
+    _moreMenuOverlayEntry = OverlayEntry(
+      builder: (BuildContext overlayContext) {
+        return _buildMoreMenuOverlay(
+          left: menuLeft,
+          top: menuTop,
+          width: menuWidth,
+          isWideLayout: isWideLayout,
+        );
+      },
+    );
+
+    Overlay.of(context).insert(_moreMenuOverlayEntry!);
+  }
+
+  /*
+   * 处理更多菜单选项点击。
+   */
+  void _handleMoreMenuSelected(String value, {required bool isWideLayout}) {
+    _hideMoreMenu(
+      onHidden: () {
+        if (value == 'note') {
+          _handleCreateNote(isWideLayout: isWideLayout);
+        } else if (value == 'folder') {
+          _handleCreateFolder();
+        } else if (value == 'sortName') {
+          _handleSortModeChanged(NoteSortMode.name);
+        } else if (value == 'sortCreatedAt') {
+          _handleSortModeChanged(NoteSortMode.createdAt);
+        } else if (value == 'sortUpdatedAt') {
+          _handleSortModeChanged(NoteSortMode.updatedAt);
+        }
+      },
+    );
+  }
+
+  /*
+   * 构建更多菜单浮层。
+   */
+  Widget _buildMoreMenuOverlay({
+    required double left,
+    required double top,
+    required double width,
+    required bool isWideLayout,
+  }) {
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerUp: (_) {
+              _hideMoreMenu();
+            },
+            onPointerCancel: (_) {
+              _hideMoreMenu();
+            },
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: width,
+          child: TweenAnimationBuilder<double>(
+            duration: Duration(milliseconds: _isMoreMenuClosing ? 160 : 180),
+            curve: _isMoreMenuClosing
+                ? Curves.easeInCubic
+                : Curves.easeOutCubic,
+            tween: Tween<double>(
+              begin: _isMoreMenuClosing ? 1 : 0.72,
+              end: _isMoreMenuClosing ? 0.72 : 1,
+            ),
+            child: _buildMoreMenuPanel(isWideLayout: isWideLayout),
+            builder: (BuildContext context, double value, Widget? child) {
+              return Opacity(
+                opacity: ((value - 0.72) / 0.28).clamp(0.0, 1.0).toDouble(),
+                child: Transform.scale(
+                  scale: value,
+                  alignment: Alignment.topRight,
+                  child: child,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /*
+   * 构建更多菜单面板。
+   */
+  Widget _buildMoreMenuPanel({required bool isWideLayout}) {
+    return Material(
+      // 更多菜单面板材质样式
+      color: Colors.white,
+      elevation: 18,
+      shadowColor: const Color(0x33000000),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        // 更多菜单选项纵向布局样式
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _buildMoreMenuItem(
+            label: '新建笔记',
+            value: 'note',
+            isWideLayout: isWideLayout,
+          ),
+          _buildMoreMenuItem(
+            label: '新建文件夹',
+            value: 'folder',
+            isWideLayout: isWideLayout,
+          ),
+          const Divider(height: 1, color: Color(0xFFEAEAEA)),
+          _buildMoreMenuItem(
+            label: '按名称排序',
+            value: 'sortName',
+            isSelected: _activeSortMode == NoteSortMode.name,
+            isWideLayout: isWideLayout,
+          ),
+          _buildMoreMenuItem(
+            label: '按创建时间排序',
+            value: 'sortCreatedAt',
+            isSelected: _activeSortMode == NoteSortMode.createdAt,
+            isWideLayout: isWideLayout,
+          ),
+          _buildMoreMenuItem(
+            label: '按修改时间排序',
+            value: 'sortUpdatedAt',
+            isSelected: _activeSortMode == NoteSortMode.updatedAt,
+            isWideLayout: isWideLayout,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /*
+   * 构建更多菜单单个选项。
+   */
+  Widget _buildMoreMenuItem({
+    required String label,
+    required String value,
+    required bool isWideLayout,
+    bool isSelected = false,
+  }) {
+    return InkWell(
+      onTap: () {
+        _handleMoreMenuSelected(value, isWideLayout: isWideLayout);
+      },
+      child: SizedBox(
+        height: 52,
+        child: Padding(
+          // 更多菜单选项内容边距样式
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: Row(
+            // 更多菜单选项横向布局样式
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  // 更多菜单选项文字样式
+                  style: TextStyle(
+                    color: isSelected
+                        ? const Color(0xFFB88900)
+                        : const Color(0xFF222222),
+                    fontSize: 16,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (isSelected)
+                const Icon(
+                  Icons.check_rounded,
+                  // 更多菜单选中图标颜色样式
+                  color: Color(0xFFB88900),
+                  size: 22,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
    * 获取首页分类集合。
    */
   List<NoteCategoryItem> _buildCategories() {
@@ -401,6 +684,184 @@ class _NoteHomePageState extends State<NoteHomePage> {
     }
 
     return folderPath.split('/').last;
+  }
+
+  /*
+   * 获取排序方式显示文案。
+   */
+  String _getSortModeLabel(NoteSortMode sortMode) {
+    switch (sortMode) {
+      case NoteSortMode.name:
+        return '按名称排序';
+      case NoteSortMode.createdAt:
+        return '按创建时间排序';
+      case NoteSortMode.updatedAt:
+        return '按修改时间排序';
+    }
+  }
+
+  /*
+   * 切换首页排序方式。
+   */
+  void _handleSortModeChanged(NoteSortMode sortMode) {
+    if (_activeSortMode == sortMode) {
+      return;
+    }
+
+    setState(() {
+      _activeSortMode = sortMode;
+    });
+  }
+
+  /*
+   * 比较两个名称文本。
+   */
+  int _compareNameText(String left, String right) {
+    final int lowerResult = left.toLowerCase().compareTo(right.toLowerCase());
+
+    if (lowerResult != 0) {
+      return lowerResult;
+    }
+
+    return left.compareTo(right);
+  }
+
+  /*
+   * 按时间倒序比较两个时间值。
+   */
+  int _compareDateDesc(DateTime left, DateTime right) {
+    return right.compareTo(left);
+  }
+
+  /*
+   * 构造直接子目录的完整相对路径。
+   */
+  String _buildChildDirectoryPath(
+    String directoryPath,
+    String childDirectoryName,
+  ) {
+    if (directoryPath.isEmpty) {
+      return childDirectoryName;
+    }
+
+    return '$directoryPath/$childDirectoryName';
+  }
+
+  /*
+   * 获取文件夹内部的全部笔记。
+   */
+  Iterable<NoteItem> _getFolderNotes(String folderPath) {
+    return _notes.where(
+      (NoteItem note) =>
+          note.directoryPath == folderPath ||
+          note.directoryPath.startsWith('$folderPath/'),
+    );
+  }
+
+  /*
+   * 获取文件夹创建时间排序使用的时间值。
+   */
+  DateTime _getFolderCreatedAt(String folderPath) {
+    DateTime? createdAt;
+
+    for (final NoteItem note in _getFolderNotes(folderPath)) {
+      if (createdAt == null || note.createdAt.isBefore(createdAt)) {
+        createdAt = note.createdAt;
+      }
+    }
+
+    return createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  /*
+   * 获取文件夹修改时间排序使用的时间值。
+   */
+  DateTime _getFolderUpdatedAt(String folderPath) {
+    DateTime? updatedAt;
+
+    for (final NoteItem note in _getFolderNotes(folderPath)) {
+      if (updatedAt == null || note.updatedAt.isAfter(updatedAt)) {
+        updatedAt = note.updatedAt;
+      }
+    }
+
+    return updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  /*
+   * 按当前排序方式比较两个直接子目录。
+   */
+  int _compareDirectoryNamesBySortMode(
+    String leftName,
+    String rightName,
+    String parentDirectoryPath,
+  ) {
+    switch (_activeSortMode) {
+      case NoteSortMode.name:
+        return _compareNameText(leftName, rightName);
+      case NoteSortMode.createdAt:
+        final int createdResult = _compareDateDesc(
+          _getFolderCreatedAt(
+            _buildChildDirectoryPath(parentDirectoryPath, leftName),
+          ),
+          _getFolderCreatedAt(
+            _buildChildDirectoryPath(parentDirectoryPath, rightName),
+          ),
+        );
+
+        if (createdResult != 0) {
+          return createdResult;
+        }
+
+        return _compareNameText(leftName, rightName);
+      case NoteSortMode.updatedAt:
+        final int updatedResult = _compareDateDesc(
+          _getFolderUpdatedAt(
+            _buildChildDirectoryPath(parentDirectoryPath, leftName),
+          ),
+          _getFolderUpdatedAt(
+            _buildChildDirectoryPath(parentDirectoryPath, rightName),
+          ),
+        );
+
+        if (updatedResult != 0) {
+          return updatedResult;
+        }
+
+        return _compareNameText(leftName, rightName);
+    }
+  }
+
+  /*
+   * 按当前排序方式比较两条笔记。
+   */
+  int _compareNotesBySortMode(NoteItem left, NoteItem right) {
+    switch (_activeSortMode) {
+      case NoteSortMode.name:
+        return _compareNameText(left.title, right.title);
+      case NoteSortMode.createdAt:
+        final int createdResult = _compareDateDesc(
+          left.createdAt,
+          right.createdAt,
+        );
+
+        if (createdResult != 0) {
+          return createdResult;
+        }
+
+        return _compareNameText(left.title, right.title);
+      case NoteSortMode.updatedAt:
+        final int updatedResult = _compareDateDesc(
+          left.updatedAt,
+          right.updatedAt,
+        );
+
+        if (updatedResult != 0) {
+          return updatedResult;
+        }
+
+        return _compareNameText(left.title, right.title);
+    }
   }
 
   /*
@@ -466,7 +927,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
       }
     }
 
-    return directories.toList()..sort();
+    return directories.toList()..sort(
+      (String left, String right) =>
+          _compareDirectoryNamesBySortMode(left, right, directoryPath),
+    );
   }
 
   /*
@@ -476,23 +940,14 @@ class _NoteHomePageState extends State<NoteHomePage> {
     return notes
         .where((NoteItem note) => note.directoryPath == directoryPath)
         .toList()
-      ..sort(
-        (NoteItem left, NoteItem right) =>
-            right.updatedAt.compareTo(left.updatedAt),
-      );
+      ..sort(_compareNotesBySortMode);
   }
 
   /*
    * 获取文件夹下的笔记总数。
    */
   int _getFolderNoteCount(String folderPath) {
-    return _notes
-        .where(
-          (NoteItem note) =>
-              note.directoryPath == folderPath ||
-              note.directoryPath.startsWith('$folderPath/'),
-        )
-        .length;
+    return _getFolderNotes(folderPath).length;
   }
 
   /*
@@ -544,7 +999,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return items;
     }
 
-    return visibleNotes
+    return (visibleNotes.toList()..sort(_compareNotesBySortMode))
         .map(
           (NoteItem note) => NoteGridItem(
             id: 'note:${note.relativePath}',
@@ -555,14 +1010,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             note: note,
           ),
         )
-        .toList()
-      ..sort((NoteGridItem left, NoteGridItem right) {
-        final DateTime leftTime =
-            left.note?.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final DateTime rightTime =
-            right.note?.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return rightTime.compareTo(leftTime);
-      });
+        .toList();
   }
 
   /*
@@ -1094,10 +1542,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
     try {
       final String previousNotePath = _activeNote!.relativePath;
-      final NoteItem savedNote = await _noteStorageService.saveNoteContent(
+      final NoteItem savedNote = (await _noteStorageService.saveNoteContent(
         _activeNote!.relativePath,
         content,
-      );
+      )).copyWith(createdAt: _activeNote!.createdAt);
 
       if (!mounted) {
         return;
@@ -1112,10 +1560,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                       item.relativePath == previousNotePath ? savedNote : item,
                 )
                 .toList()
-              ..sort(
-                (NoteItem left, NoteItem right) =>
-                    right.updatedAt.compareTo(left.updatedAt),
-              );
+              ..sort(_compareNotesBySortMode);
 
         if (_activeCategoryId != 'all' &&
             !savedNote.tags.contains(_activeCategoryId)) {
@@ -1188,8 +1633,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildNormalTopBar({required bool isWideLayout}) {
     return Padding(
-      // 顶部栏只保留上下间距，左右对齐交给首页根容器统一控制。
-      padding: const EdgeInsets.fromLTRB(0, 22, 0, 0),
+      // 顶部栏独立控制外边距样式，方便和下方内容使用不同的水平间距。
+      padding: const EdgeInsets.fromLTRB(28, 22, 0, 0),
       child: Row(
         // 顶部标题栏横向布局样式
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1260,38 +1705,32 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   height: 44,
                 ),
               ),
-              PopupMenuButton<String>(
-                padding: EdgeInsets.zero,
-                child: const SizedBox(
-                  // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
-                  width: 28,
-                  height: 44,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Icon(
-                      Icons.more_vert_rounded,
-                      color: Color(0xFF1F1F1F),
-                      size: 22,
+              Container(
+                key: _moreMenuButtonKey,
+                // 临时查看三个点按钮区域背景样式。
+                color: const Color(0x33FF0000),
+                child: Tooltip(
+                  message: '更多操作，${_getSortModeLabel(_activeSortMode)}',
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      _showMoreMenu(isWideLayout: isWideLayout);
+                    },
+                    child: const SizedBox(
+                      // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
+                      width: 70,
+                      height: 44,
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.more_vert_rounded,
+                          color: Color(0xFF1F1F1F),
+                          size: 22,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-                onSelected: (String value) {
-                  if (value == 'note') {
-                    _handleCreateNote(isWideLayout: isWideLayout);
-                  }
-                  if (value == 'folder') {
-                    _handleCreateFolder();
-                  }
-                },
-                itemBuilder: (BuildContext menuContext) {
-                  return const <PopupMenuEntry<String>>[
-                    PopupMenuItem<String>(value: 'note', child: Text('新建笔记')),
-                    PopupMenuItem<String>(
-                      value: 'folder',
-                      child: Text('新建文件夹'),
-                    ),
-                  ];
-                },
               ),
             ],
           ),
@@ -1393,8 +1832,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildSelectionTopBar() {
     return Padding(
-      // 选择模式顶部栏只保留上方间距，左右对齐交给首页根容器统一控制。
-      padding: const EdgeInsets.fromLTRB(0, 22, 0, 0),
+      // 选择模式顶部栏独立控制外边距样式，方便和下方内容使用不同的水平间距。
+      padding: const EdgeInsets.fromLTRB(28, 22, 28, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -2192,23 +2631,31 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Widget _buildHomePanel({required bool isWideLayout}) {
     return Stack(
       children: <Widget>[
-        Padding(
-          // 首页根容器左右边距样式，统一控制标题、分类栏、路径栏和卡片列表的水平对齐。
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            // 首页内容纵向布局样式
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              _isSelectionMode
-                  ? _buildSelectionTopBar()
-                  : _buildNormalTopBar(isWideLayout: isWideLayout),
-              _buildSearchBar(),
-              _buildSummaryBar(),
-              _buildCategoryBar(),
-              _buildPathBar(),
-              _buildBrowserPanel(isWideLayout: isWideLayout),
-            ],
-          ),
+        Column(
+          // 首页内容纵向布局样式，顶部栏和下方内容分开控制边距。
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            _isSelectionMode
+                ? _buildSelectionTopBar()
+                : _buildNormalTopBar(isWideLayout: isWideLayout),
+            Expanded(
+              child: Padding(
+                // 首页下方根容器左右边距样式，只控制分类栏、路径栏和卡片列表。
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: Column(
+                  // 首页下方内容纵向布局样式
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    _buildSearchBar(),
+                    _buildSummaryBar(),
+                    _buildCategoryBar(),
+                    _buildPathBar(),
+                    _buildBrowserPanel(isWideLayout: isWideLayout),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
         _buildSelectionActionBar(),
       ],

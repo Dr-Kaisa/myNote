@@ -146,6 +146,7 @@ class NoteStorageService {
       title: extractNoteTitle(content),
       preview: extractNotePreview(content),
       content: content,
+      createdAt: fileStat.changed,
       updatedAt: fileStat.modified,
       tags: extractNoteTags(content),
     );
