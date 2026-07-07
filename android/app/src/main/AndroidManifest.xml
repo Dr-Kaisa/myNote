@@ -1,13 +1,22 @@
+<!--
+  文件说明：Android 主清单文件，声明应用权限、入口 Activity 和 Flutter 引擎配置。
+  这个文件不是界面代码，而是 Android 系统读取的应用配置。
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Android 11+ 访问 /storage/emulated/0/myNote 需要所有文件访问权限。 -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Android 12 及以下读取外部存储的兼容权限。 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- Android 9 及以下写入外部存储的兼容权限。 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
+    <!-- application 是整个 Android 应用的全局配置。 -->
     <application
         android:label="myNote"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
+        <!-- MainActivity 是应用启动后承载 Flutter 页面和原生权限通道的入口。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

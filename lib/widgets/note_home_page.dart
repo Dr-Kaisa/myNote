@@ -1,5 +1,15 @@
 /*
  * 文件说明：笔记主页组件文件，负责组织笔记首页、文件夹视图、选择模式、移动面板与编辑区交互。
+ *
+ * 这个文件是应用里最主要的页面文件。
+ * 不熟 Flutter 时可以先按这个顺序理解：
+ * 1. 上半部分是数据结构和状态字段，例如当前有哪些笔记、当前进了哪个文件夹。
+ * 2. 中间部分是事件处理方法，例如点击文件夹、创建笔记、删除笔记。
+ * 3. 下半部分是 _build 开头的方法，它们负责把状态渲染成界面。
+ *
+ * Flutter 里的 Widget 可以理解成界面积木。
+ * Row 是横向排列，Column 是纵向排列，Container 是带样式的盒子，
+ * Padding 是外边距，Expanded 是把剩余空间分给某个子组件。
  */
 import 'dart:async';
 
@@ -11,6 +21,9 @@ import 'package:my_note/widgets/markdown_toolbar.dart';
 
 /*
  * 首页分类项数据模型。
+ *
+ * 分类栏就是页面上方那排胶囊按钮。
+ * 一个 NoteCategoryItem 代表其中一个按钮，比如“全部笔记”或某个常访问文件夹。
  */
 class NoteCategoryItem {
   /*
@@ -24,27 +37,38 @@ class NoteCategoryItem {
 
   /*
    * 分类唯一标识。
+   *
+   * “全部笔记”的 id 是 all；文件夹分类的 id 是文件夹相对路径。
    */
   final String id;
 
   /*
    * 分类显示文案。
+   *
+   * 这是按钮上用户能看到的文字。
    */
   final String label;
 
   /*
    * 是否为“全部笔记”分类。
+   *
+   * 这个字段用来区分根分类和文件夹分类，因为它们的选中判断不一样。
    */
   final bool isAllNotes;
 }
 
 /*
  * 首页网格项类型。
+ *
+ * 首页下面的瀑布流里有两种卡片：文件夹卡片和笔记卡片。
  */
 enum NoteGridItemType { folder, note }
 
 /*
  * 首页网格项数据模型。
+ *
+ * NoteGridItem 是给首页瀑布流用的数据。
+ * 它把文件夹和笔记统一成一种结构，方便 _buildBrowserPanel 统一排列。
  */
 class NoteGridItem {
   /*
@@ -62,36 +86,50 @@ class NoteGridItem {
 
   /*
    * 网格项唯一标识。
+   *
+   * 文件夹一般是 folder:路径，笔记一般是 note:路径，用前缀区分类型。
    */
   final String id;
 
   /*
    * 网格项类型。
+   *
+   * type 决定最终调用 _buildFolderCard 还是 _buildNoteCard。
    */
   final NoteGridItemType type;
 
   /*
    * 网格项主标题。
+   *
+   * 文件夹时是文件夹名；笔记时是笔记标题。
    */
   final String title;
 
   /*
    * 网格项辅助内容。
+   *
+   * 文件夹时通常是数量；笔记时通常是摘要。
    */
   final String subtitle;
 
   /*
    * 网格项相对位置信息。
+   *
+   * 文件夹时是文件夹路径；笔记时是显示路径。
    */
   final String locationText;
 
   /*
    * 关联的笔记对象。
+   *
+   * 只有笔记卡片会有 note；文件夹卡片这里是 null。
    */
   final NoteItem? note;
 
   /*
    * 文件夹下的笔记数量。
+   *
+   * 只有文件夹卡片会用它显示数量。
    */
   final int noteCount;
 }
@@ -1235,33 +1273,52 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
-   * 构建分类标签栏。
+   * 构建首页上方的分类标签栏。
+   *
+   * 这里负责展示“全部笔记”和常访问文件夹这一排横向滑动标签。
+   * 每一个标签本身的圆角、背景色和文字样式由 _buildCategoryPill 负责。
+   * 当前方法只负责决定标签栏是否显示、显示哪些标签，以及它们如何横向排列。
    */
   Widget _buildCategoryBar() {
+    // 选择模式下需要把屏幕空间让给批量操作区域，所以隐藏分类标签栏。
     if (_isSelectionMode) {
+      // shrink 是一个零尺寸占位组件，用它可以避免返回 null，同时不占布局空间。
       return const SizedBox.shrink();
     }
 
+    // 从当前笔记和文件夹数据中生成分类列表，通常包含“全部笔记”和常访问文件夹。
     final List<NoteCategoryItem> categories = _buildCategories();
 
     return Padding(
+      // 分类栏外层留白：左侧 28 对齐页面内容，上方 28 拉开标题区，右侧交给滚动列表内部处理。
       padding: const EdgeInsets.fromLTRB(28, 28, 0, 0),
       child: SizedBox(
-        height: 58,
+        // 固定分类栏高度，防止标签内容或字体变化导致首页布局上下跳动。
+        height: 48,
         child: ListView.separated(
           // 分类栏横向滚动布局样式
+          // 横向滚动用于容纳多个常访问文件夹，窄屏时不会把标签挤压变形。
           scrollDirection: Axis.horizontal,
+          // 右侧补 28 间距，保证最后一个标签滑到末尾时不会贴住屏幕边缘。
           padding: const EdgeInsets.only(right: 28),
+          // 列表项数量完全由 categories 决定，避免手写额外项导致索引错位。
           itemCount: categories.length,
+          // 每两个分类标签之间固定 10 像素间距，保持图二那种胶囊按钮间隔。
           separatorBuilder: (BuildContext context, int index) {
             return const SizedBox(width: 10);
           },
+          // 按索引把分类数据转换为可点击的分类按钮。
           itemBuilder: (BuildContext context, int index) {
+            // 当前要渲染的分类数据，里面包含 id、显示文字，以及是否是“全部笔记”。
             final NoteCategoryItem category = categories[index];
+            // 判断当前分类是否处于选中状态，用来控制 _buildCategoryPill 的背景色。
             final bool isActive = category.isAllNotes
+                // “全部笔记”选中条件：当前没有进入任何文件夹目录。
                 ? _activeDirectoryPath.isEmpty
+                // 文件夹分类选中条件：当前目录路径等于该分类的文件夹路径。
                 : _activeDirectoryPath == category.id;
 
+            // 构建单个分类按钮，点击行为和具体样式都收在 _buildCategoryPill 里。
             return _buildCategoryPill(category: category, isActive: isActive);
           },
         ),
@@ -1281,23 +1338,22 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _handleCategoryChanged(category.id);
       },
       child: Container(
-        height: 58,
         decoration: BoxDecoration(
           // 分类文字按钮容器样式
-          color: isActive ? const Color(0xFFE1E1E1) : Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          color: isActive ? const Color(0xFFdfe0e2) : Colors.white,
+          borderRadius: BorderRadius.circular(15),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 22),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         alignment: Alignment.center,
         child: Text(
           category.label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           // 分类文字按钮文本样式
-          style: const TextStyle(
-            color: Color(0xFF111111),
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
+          style: TextStyle(
+            color: const Color(0xFF111111),
+            fontSize: 16,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
           ),
         ),
       ),
@@ -1551,6 +1607,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildFolderCard(NoteGridItem item) {
     final bool isSelected = _selectedItemIds.contains(item.id);
+    final String folderTitle = item.title.isNotEmpty
+        ? item.title
+        : item.locationText.split('/').last;
 
     return GestureDetector(
       onTap: () {
@@ -1577,11 +1636,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
             ),
           ],
         ),
-        padding: const EdgeInsets.all(22),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
         child: Row(
           children: <Widget>[
-            _buildFolderIcon(),
-            const SizedBox(width: 14),
+            _buildFolderIcon(size: 52),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 // 文件夹文字纵向布局样式
@@ -1589,7 +1648,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    item.title,
+                    folderTitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     // 文件夹标题样式
@@ -2173,7 +2232,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _handleSystemBack(isWideLayout: isWideLayout);
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF6F6F6),
+        backgroundColor: const Color(0xFFF0F1F3),
         body: _isLoading
             ? const Center(
                 child: CircularProgressIndicator(color: Color(0xFFFFC000)),
