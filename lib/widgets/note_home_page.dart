@@ -827,7 +827,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return '全部笔记';
     }
 
-    return folderPath.split('/').last;
+    final String folderName = folderPath.split('/').last;
+
+    if (folderName.length <= 9) {
+      return folderName;
+    }
+
+    return '${folderName.substring(0, 9)}...';
   }
 
   /*
