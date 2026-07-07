@@ -1421,7 +1421,6 @@ class _NoteHomePageState extends State<NoteHomePage> {
       _activeCategoryId = 'all';
       _activeDirectoryPath = categoryId == 'all' ? '' : categoryId;
       _increaseFolderVisitCount(_activeDirectoryPath);
-      _exitSelectionMode();
     });
   }
 
@@ -1432,7 +1431,6 @@ class _NoteHomePageState extends State<NoteHomePage> {
     setState(() {
       _activeDirectoryPath = directoryPath;
       _increaseFolderVisitCount(directoryPath);
-      _exitSelectionMode();
     });
   }
 
@@ -1679,7 +1677,6 @@ class _NoteHomePageState extends State<NoteHomePage> {
       }
 
       _selectedItemIds = nextSelectedItemIds;
-      _isSelectionMode = nextSelectedItemIds.isNotEmpty;
     });
   }
 
