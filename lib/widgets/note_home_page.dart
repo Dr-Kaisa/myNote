@@ -442,7 +442,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
     final double menuWidth = screenSize.width < 248
         ? screenSize.width - 24
         : 224;
-    final double menuLeft = (buttonOffset.dx + buttonSize.width - menuWidth)
+    // 菜单右侧对齐下方笔记内容右边缘，而不是贴到顶部栏最右侧。
+    final double menuRight = buttonOffset.dx + buttonSize.width - 28;
+    final double menuLeft = (menuRight - menuWidth)
         .clamp(12.0, screenSize.width - menuWidth - 12.0)
         .toDouble();
     final double menuTop = (buttonOffset.dy + buttonSize.height + 8)
@@ -505,7 +507,23 @@ class _NoteHomePageState extends State<NoteHomePage> {
             onPointerCancel: (_) {
               _hideMoreMenu();
             },
-            child: const SizedBox.expand(),
+            child: TweenAnimationBuilder<double>(
+              duration: Duration(milliseconds: _isMoreMenuClosing ? 160 : 180),
+              curve: _isMoreMenuClosing
+                  ? Curves.easeInCubic
+                  : Curves.easeOutCubic,
+              tween: Tween<double>(
+                begin: _isMoreMenuClosing ? 1 : 0,
+                end: _isMoreMenuClosing ? 0 : 1,
+              ),
+              builder: (BuildContext context, double value, Widget? child) {
+                return Opacity(opacity: value, child: child);
+              },
+              child: Container(
+                // 更多菜单外部遮罩背景样式。
+                color: const Color(0x33000000),
+              ),
+            ),
           ),
         ),
         Positioned(
@@ -1707,8 +1725,6 @@ class _NoteHomePageState extends State<NoteHomePage> {
               ),
               Container(
                 key: _moreMenuButtonKey,
-                // 临时查看三个点按钮区域背景样式。
-                color: const Color(0x33FF0000),
                 child: Tooltip(
                   message: '更多操作，${_getSortModeLabel(_activeSortMode)}',
                   child: GestureDetector(
