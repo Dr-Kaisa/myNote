@@ -72,6 +72,13 @@ enum NoteGridItemType { folder, note }
 enum NoteSortMode { name, createdAt, updatedAt }
 
 /*
+ * 首页视图模式。
+ *
+ * 宫格模式用于卡片瀑布流；列表模式用于更紧凑地浏览笔记和文件夹。
+ */
+enum NoteViewMode { grid, list }
+
+/*
  * 首页网格项数据模型。
  *
  * NoteGridItem 是给首页瀑布流用的数据。
@@ -158,6 +165,120 @@ class NoteHomePage extends StatefulWidget {
 }
 
 /*
+ * 笔记设置页面。
+ *
+ * 当前先提供设置页入口和基础页面结构，后续具体设置项可以继续放在这里。
+ */
+class NoteSettingsPage extends StatelessWidget {
+  /*
+   * 笔记设置页面构造方法。
+   */
+  const NoteSettingsPage({super.key});
+
+  /*
+   * 构建设置页标题栏。
+   */
+  Widget _buildHeader(BuildContext context) {
+    return Padding(
+      // 设置页标题栏外边距样式
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+      child: Row(
+        // 设置页标题栏横向布局样式
+        children: <Widget>[
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            icon: const Icon(Icons.arrow_back_rounded),
+            color: const Color(0xFF111111),
+          ),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              '设置',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              // 设置页标题文字样式
+              style: TextStyle(
+                color: Color(0xFF111111),
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /*
+   * 构建设置页空状态内容。
+   */
+  Widget _buildEmptyContent() {
+    return Expanded(
+      child: Center(
+        child: Padding(
+          // 设置页空状态外边距样式
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            // 设置页空状态纵向布局样式
+            mainAxisSize: MainAxisSize.min,
+            children: const <Widget>[
+              Icon(
+                Icons.settings_rounded,
+                // 设置页空状态图标样式
+                color: Color(0xFFFFC000),
+                size: 58,
+              ),
+              SizedBox(height: 14),
+              Text(
+                '设置',
+                textAlign: TextAlign.center,
+                // 设置页空状态标题样式
+                style: TextStyle(
+                  color: Color(0xFF222222),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                '后续设置项会放在这里',
+                textAlign: TextAlign.center,
+                // 设置页空状态说明样式
+                style: TextStyle(
+                  color: Color(0xFF777777),
+                  fontSize: 15,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建设置页面。
+   */
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      // 设置页背景色样式
+      backgroundColor: const Color(0xFFF0F1F3),
+      body: SafeArea(
+        child: Column(
+          // 设置页根内容纵向布局样式
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[_buildHeader(context), _buildEmptyContent()],
+        ),
+      ),
+    );
+  }
+}
+
+/*
  * 笔记主页状态对象。
  */
 class _NoteHomePageState extends State<NoteHomePage> {
@@ -240,6 +361,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 当前首页排序方式。
    */
   NoteSortMode _activeSortMode = NoteSortMode.updatedAt;
+
+  /*
+   * 当前首页视图模式。
+   */
+  NoteViewMode _activeViewMode = NoteViewMode.grid;
 
   /*
    * 是否处于数据加载中。
@@ -472,10 +598,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
   void _handleMoreMenuSelected(String value, {required bool isWideLayout}) {
     _hideMoreMenu(
       onHidden: () {
-        if (value == 'note') {
-          _handleCreateNote(isWideLayout: isWideLayout);
-        } else if (value == 'folder') {
-          _handleCreateFolder();
+        if (value == 'viewMode') {
+          _handleViewModeChanged();
+        } else if (value == 'settings') {
+          _openSettingsPage();
         } else if (value == 'sortName') {
           _handleSortModeChanged(NoteSortMode.name);
         } else if (value == 'sortCreatedAt') {
@@ -572,13 +698,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           _buildMoreMenuItem(
-            label: '新建笔记',
-            value: 'note',
+            label: _getOppositeViewModeLabel(),
+            value: 'viewMode',
             isWideLayout: isWideLayout,
           ),
           _buildMoreMenuItem(
-            label: '新建文件夹',
-            value: 'folder',
+            label: '设置',
+            value: 'settings',
             isWideLayout: isWideLayout,
           ),
           const Divider(height: 1, color: Color(0xFFEAEAEA)),
@@ -719,6 +845,18 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 获取菜单里需要展示的相反视图模式文案。
+   */
+  String _getOppositeViewModeLabel() {
+    switch (_activeViewMode) {
+      case NoteViewMode.grid:
+        return '列表模式';
+      case NoteViewMode.list:
+        return '宫格模式';
+    }
+  }
+
+  /*
    * 切换首页排序方式。
    */
   void _handleSortModeChanged(NoteSortMode sortMode) {
@@ -729,6 +867,30 @@ class _NoteHomePageState extends State<NoteHomePage> {
     setState(() {
       _activeSortMode = sortMode;
     });
+  }
+
+  /*
+   * 切换首页视图模式。
+   */
+  void _handleViewModeChanged() {
+    setState(() {
+      _activeViewMode = _activeViewMode == NoteViewMode.grid
+          ? NoteViewMode.list
+          : NoteViewMode.grid;
+    });
+  }
+
+  /*
+   * 打开设置页面。
+   */
+  void _openSettingsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext routeContext) {
+          return const NoteSettingsPage();
+        },
+      ),
+    );
   }
 
   /*
@@ -2249,7 +2411,195 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
-   * 构建首页网格视图。
+   * 构建列表模式下的文件夹行。
+   */
+  Widget _buildFolderListRow(NoteGridItem item) {
+    final bool isSelected = _selectedItemIds.contains(item.id);
+    final String folderTitle = item.title.isNotEmpty
+        ? item.title
+        : item.locationText.split('/').last;
+
+    return GestureDetector(
+      onTap: () {
+        if (_isSelectionMode) {
+          _toggleSelectedItem(item.id);
+          return;
+        }
+
+        _handleDirectoryChanged(item.locationText);
+      },
+      onLongPress: () {
+        _enterSelectionMode(item.id);
+      },
+      child: Container(
+        // 文件夹列表行容器样式
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 14,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Row(
+          // 文件夹列表行横向布局样式
+          children: <Widget>[
+            _buildFolderIcon(size: 44),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                // 文件夹列表文字纵向布局样式
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    folderTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // 文件夹列表标题样式
+                    style: const TextStyle(
+                      color: Color(0xFF111111),
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${item.noteCount}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // 文件夹列表数量样式
+                    style: const TextStyle(
+                      color: Color(0xFF888888),
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_isSelectionMode) _buildSelectionCircle(isSelected),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建列表模式下的笔记行。
+   */
+  Widget _buildNoteListRow(NoteGridItem item, {required bool isWideLayout}) {
+    final NoteItem note = item.note!;
+    final bool isSelected = _selectedItemIds.contains(item.id);
+
+    return GestureDetector(
+      onTap: () {
+        _handleSelectNote(note, isWideLayout: isWideLayout);
+      },
+      onLongPress: () {
+        _enterSelectionMode(item.id);
+      },
+      child: Container(
+        // 笔记列表行容器样式
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 14,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+        child: Row(
+          // 笔记列表行横向布局样式
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                // 笔记列表文字纵向布局样式
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    note.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // 笔记列表标题样式
+                    style: const TextStyle(
+                      color: Color(0xFF111111),
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    note.preview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    // 笔记列表摘要样式
+                    style: const TextStyle(
+                      color: Color(0xFF666666),
+                      fontSize: 15,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${note.updatedAt.month}月${note.updatedAt.day}日',
+                    // 笔记列表日期样式
+                    style: const TextStyle(
+                      color: Color(0xFF9B9B9B),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_isSelectionMode) ...<Widget>[
+              const SizedBox(width: 12),
+              _buildSelectionCircle(isSelected),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建首页列表视图。
+   */
+  Widget _buildBrowserListView({
+    required List<NoteGridItem> items,
+    required bool isWideLayout,
+  }) {
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(
+        0,
+        _isSelectionMode ? 0 : 18,
+        0,
+        _isSelectionMode ? 100 : 108,
+      ),
+      itemCount: items.length,
+      separatorBuilder: (BuildContext context, int index) {
+        return const SizedBox(height: 12);
+      },
+      itemBuilder: (BuildContext context, int index) {
+        final NoteGridItem item = items[index];
+
+        if (item.type == NoteGridItemType.folder) {
+          return _buildFolderListRow(item);
+        }
+
+        return _buildNoteListRow(item, isWideLayout: isWideLayout);
+      },
+    );
+  }
+
+  /*
+   * 构建首页浏览视图。
    */
   Widget _buildBrowserPanel({required bool isWideLayout}) {
     final List<NoteGridItem> gridItems = _buildGridItems();
@@ -2263,6 +2613,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 style: TextStyle(color: Color(0xFF888888), fontSize: 16),
               ),
             )
+          : _activeViewMode == NoteViewMode.list
+          ? _buildBrowserListView(items: gridItems, isWideLayout: isWideLayout)
           : LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
                 final double itemWidth = _getBrowserItemWidth(
