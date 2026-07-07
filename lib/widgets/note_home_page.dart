@@ -2127,31 +2127,44 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   height: 44,
                 ),
               ),
-              Container(
-                key: _moreMenuButtonKey,
-                child: Tooltip(
-                  message: '更多操作，${_getSortModeLabel(_activeSortMode)}',
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      _showMoreMenu(isWideLayout: isWideLayout);
-                    },
-                    child: const SizedBox(
-                      // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
-                      width: 70,
-                      height: 44,
-                      child: Align(
-                        alignment: Alignment.center,
-                        child: Icon(
-                          Icons.more_vert_rounded,
-                          color: Color(0xFF1F1F1F),
-                          size: 22,
+              if (_isSelectionMode)
+                IconButton(
+                  onPressed: _selectAllVisibleItems,
+                  icon: const Icon(Icons.checklist_rounded),
+                  color: const Color(0xFF222222),
+                  iconSize: 30,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 70,
+                    height: 44,
+                  ),
+                )
+              else
+                Container(
+                  key: _moreMenuButtonKey,
+                  child: Tooltip(
+                    message: '更多操作，${_getSortModeLabel(_activeSortMode)}',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        _showMoreMenu(isWideLayout: isWideLayout);
+                      },
+                      child: const SizedBox(
+                        // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
+                        width: 70,
+                        height: 44,
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.more_vert_rounded,
+                            color: Color(0xFF1F1F1F),
+                            size: 22,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         ],
@@ -2167,12 +2180,6 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 当前方法只负责决定标签栏是否显示、显示哪些标签，以及它们如何横向排列。
    */
   Widget _buildCategoryBar() {
-    // 选择模式下需要把屏幕空间让给批量操作区域，所以隐藏分类标签栏。
-    if (_isSelectionMode) {
-      // shrink 是一个零尺寸占位组件，用它可以避免返回 null，同时不占布局空间。
-      return const SizedBox.shrink();
-    }
-
     // 从当前笔记和文件夹数据中生成分类列表，通常包含“全部笔记”和常访问文件夹。
     final List<NoteCategoryItem> categories = _buildCategories();
 
@@ -2248,60 +2255,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
-   * 构建选择模式顶部栏区域。
-   */
-  Widget _buildSelectionTopBar() {
-    return Padding(
-      // 选择模式顶部栏独立控制外边距样式，方便和下方内容使用不同的水平间距。
-      padding: const EdgeInsets.fromLTRB(28, 22, 28, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              IconButton(
-                onPressed: () {
-                  setState(_exitSelectionMode);
-                },
-                icon: const Icon(Icons.close_rounded),
-                color: const Color(0xFF222222),
-                iconSize: 34,
-              ),
-              const Spacer(),
-              IconButton(
-                onPressed: _selectAllVisibleItems,
-                icon: const Icon(Icons.checklist_rounded),
-                color: const Color(0xFF222222),
-                iconSize: 30,
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Padding(
-            padding: const EdgeInsets.only(left: 12),
-            child: Text(
-              '已选择${_selectedItemIds.length}项',
-              // 选择模式标题样式
-              style: const TextStyle(
-                color: Color(0xFF222222),
-                fontSize: 36,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /*
    * 构建搜索栏。
    */
   Widget _buildSearchBar() {
-    if (_isSelectionMode) {
-      return const SizedBox(height: 20);
-    }
-
     return const SizedBox.shrink();
   }
 
@@ -2722,42 +2678,51 @@ class _NoteHomePageState extends State<NoteHomePage> {
           ],
         ),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
-        child: Row(
+        child: Stack(
           children: <Widget>[
-            _buildFolderIcon(size: 52),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                // 文件夹文字纵向布局样式
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    folderTitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    // 文件夹标题样式
-                    style: const TextStyle(
-                      color: Color(0xFF111111),
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
+            Row(
+              children: <Widget>[
+                _buildFolderIcon(size: 52),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    // 文件夹文字纵向布局样式
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        folderTitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        // 文件夹标题样式
+                        style: const TextStyle(
+                          color: Color(0xFF111111),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${item.noteCount}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        // 文件夹数量样式
+                        style: const TextStyle(
+                          color: Color(0xFF888888),
+                          fontSize: 18,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${item.noteCount}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    // 文件夹数量样式
-                    style: const TextStyle(
-                      color: Color(0xFF888888),
-                      fontSize: 18,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            if (_isSelectionMode) _buildSelectionCircle(isSelected),
+            if (_isSelectionMode)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: _buildSelectionCircle(isSelected),
+              ),
           ],
         ),
       ),
@@ -2897,42 +2862,51 @@ class _NoteHomePageState extends State<NoteHomePage> {
           ],
         ),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        child: Row(
-          // 文件夹列表行横向布局样式
+        child: Stack(
           children: <Widget>[
-            _buildFolderIcon(size: 44),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                // 文件夹列表文字纵向布局样式
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    folderTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    // 文件夹列表标题样式
-                    style: const TextStyle(
-                      color: Color(0xFF111111),
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
-                    ),
+            Row(
+              // 文件夹列表行横向布局样式
+              children: <Widget>[
+                _buildFolderIcon(size: 44),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    // 文件夹列表文字纵向布局样式
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        folderTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        // 文件夹列表标题样式
+                        style: const TextStyle(
+                          color: Color(0xFF111111),
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${item.noteCount}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        // 文件夹列表数量样式
+                        style: const TextStyle(
+                          color: Color(0xFF888888),
+                          fontSize: 15,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${item.noteCount}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    // 文件夹列表数量样式
-                    style: const TextStyle(
-                      color: Color(0xFF888888),
-                      fontSize: 15,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            if (_isSelectionMode) _buildSelectionCircle(isSelected),
+            if (_isSelectionMode)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: _buildSelectionCircle(isSelected),
+              ),
           ],
         ),
       ),
@@ -2976,10 +2950,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
           ],
         ),
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
-        child: Row(
-          // 笔记列表行横向布局样式
+        child: Stack(
           children: <Widget>[
-            Expanded(
+            SizedBox(
+              width: double.infinity,
               child: Column(
                 // 笔记列表文字纵向布局样式
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3019,10 +2993,12 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 ],
               ),
             ),
-            if (_isSelectionMode) ...<Widget>[
-              const SizedBox(width: 12),
-              _buildSelectionCircle(isSelected),
-            ],
+            if (_isSelectionMode)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: _buildSelectionCircle(isSelected),
+              ),
           ],
         ),
       ),
@@ -3037,12 +3013,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
     required bool isWideLayout,
   }) {
     return ListView.separated(
-      padding: EdgeInsets.fromLTRB(
-        0,
-        _isSelectionMode ? 0 : 18,
-        0,
-        _isSelectionMode ? 100 : 108,
-      ),
+      padding: EdgeInsets.fromLTRB(0, 18, 0, 108),
       itemCount: items.length,
       separatorBuilder: (BuildContext context, int index) {
         return const SizedBox(height: 12);
@@ -3097,12 +3068,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 );
 
                 return SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(
-                    0,
-                    _isSelectionMode ? 0 : 18,
-                    0,
-                    _isSelectionMode ? 100 : 108,
-                  ),
+                  padding: EdgeInsets.fromLTRB(0, 18, 0, 108),
                   child: Row(
                     // 首页瀑布流横向分列布局样式
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -3469,9 +3435,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           // 首页内容纵向布局样式，顶部栏和下方内容分开控制边距。
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            _isSelectionMode
-                ? _buildSelectionTopBar()
-                : _buildNormalTopBar(isWideLayout: isWideLayout),
+            _buildNormalTopBar(isWideLayout: isWideLayout),
             Expanded(
               child: Padding(
                 // 首页下方根容器左右边距样式，只控制分类栏、路径栏和卡片列表。
