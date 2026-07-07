@@ -2356,7 +2356,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         border: Border.all(color: const Color(0xFFE1E1E1)),
       ),
       child: isSelected
-          ? const Icon(Icons.check_rounded, color: Colors.white, size: 15)
+          ? const Icon(Icons.check_rounded, color: Colors.white, size: 20)
           : null,
     );
   }
@@ -2418,7 +2418,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       // 拖动文件夹预览容器样式
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: const <BoxShadow>[
           BoxShadow(
             color: Color(0x26000000),
@@ -2479,7 +2479,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       // 拖动笔记预览容器样式
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: const <BoxShadow>[
           BoxShadow(
             color: Color(0x26000000),
@@ -2668,7 +2668,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         // 文件夹卡片容器样式
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(18),
           boxShadow: const <BoxShadow>[
             BoxShadow(
               color: Color(0x0F000000),
@@ -2756,7 +2756,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         // 笔记卡片容器样式
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(18),
           boxShadow: const <BoxShadow>[
             BoxShadow(
               color: Color(0x0F000000),
