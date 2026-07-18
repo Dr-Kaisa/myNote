@@ -284,6 +284,11 @@ class NoteSettingsPage extends StatelessWidget {
  */
 class _NoteHomePageState extends State<NoteHomePage> {
   /*
+   * 按压、拖拽和命中目标时统一使用的卡片缩放比例。
+   */
+  static const double _dragCardScale = 0.90;
+
+  /*
    * 笔记存储服务实例。
    */
   final NoteStorageService _noteStorageService = NoteStorageService();
@@ -369,6 +374,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Set<String> _selectedItemIds = <String>{};
 
   /*
+   * 当前处于按压状态的浏览项标识。
+   */
+  String? _pressedBrowserItemId;
+
+  /*
    * 当前正在拖动的浏览项。
    */
   NoteGridItem? _draggingBrowserItem;
@@ -377,6 +387,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 当前拖动预览在首页面板内的位置。
    */
   Offset? _dragPreviewLocalTopLeft;
+
+  /*
+   * 当前手指在拖动预览内部的按压偏移。
+   */
+  Offset? _dragPointerOffset;
 
   /*
    * 当前拖动预览尺寸。
@@ -1657,8 +1672,10 @@ class _NoteHomePageState extends State<NoteHomePage> {
   void _exitSelectionMode() {
     _isSelectionMode = false;
     _selectedItemIds = <String>{};
+    _pressedBrowserItemId = null;
     _draggingBrowserItem = null;
     _dragPreviewLocalTopLeft = null;
+    _dragPointerOffset = null;
     _dragPreviewSize = Size.zero;
     _dragHoverItemId = null;
   }
@@ -1677,6 +1694,36 @@ class _NoteHomePageState extends State<NoteHomePage> {
       }
 
       _selectedItemIds = nextSelectedItemIds;
+    });
+  }
+
+  /*
+   * 开始按压浏览项。
+   */
+  void _startPressingBrowserItem(String itemId) {
+    if (_draggingBrowserItem != null || _pressedBrowserItemId == itemId) {
+      return;
+    }
+
+    setState(() {
+      _pressedBrowserItemId = itemId;
+    });
+  }
+
+  /*
+   * 结束按压浏览项。
+   */
+  void _finishPressingBrowserItem(String itemId) {
+    if (_draggingBrowserItem?.id == itemId) {
+      return;
+    }
+
+    if (_pressedBrowserItemId != itemId) {
+      return;
+    }
+
+    setState(() {
+      _pressedBrowserItemId = null;
     });
   }
 
@@ -1751,6 +1798,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 根据拖拽预览位置获取缩放后的实际命中矩形。
+   */
+  Rect _getScaledDragRect(Offset previewTopLeft, Size previewSize) {
+    return Rect.fromCenter(
+      center: previewTopLeft + previewSize.center(Offset.zero),
+      width: previewSize.width * _dragCardScale,
+      height: previewSize.height * _dragCardScale,
+    );
+  }
+
+  /*
    * 开始拖动浏览项。
    */
   void _startDraggingBrowserItem(NoteGridItem item, Offset globalPosition) {
@@ -1758,25 +1816,34 @@ class _NoteHomePageState extends State<NoteHomePage> {
       item.id,
     ).currentContext;
     Size itemSize = const Size(180, 140);
+    Offset? itemTopLeft;
 
     if (itemContext != null) {
       final RenderObject? itemRenderObject = itemContext.findRenderObject();
 
       if (itemRenderObject is RenderBox) {
         itemSize = itemRenderObject.size;
+        itemTopLeft = _getHomePanelLocalPosition(
+          itemRenderObject.localToGlobal(Offset.zero),
+        );
       }
     }
 
     final Offset localPosition = _getHomePanelLocalPosition(globalPosition);
-    final Offset previewTopLeft = localPosition - itemSize.center(Offset.zero);
-    final Rect dragRect = previewTopLeft & itemSize;
+    final Offset pointerOffset = itemTopLeft == null
+        ? itemSize.center(Offset.zero)
+        : localPosition - itemTopLeft;
+    final Offset previewTopLeft = itemTopLeft ?? localPosition - pointerOffset;
+    final Rect dragRect = _getScaledDragRect(previewTopLeft, itemSize);
 
     setState(() {
       _isSelectionMode = true;
       _selectedItemIds = <String>{item.id};
+      _pressedBrowserItemId = item.id;
       _draggingBrowserItem = item;
       _dragPreviewSize = itemSize;
       _dragPreviewLocalTopLeft = previewTopLeft;
+      _dragPointerOffset = pointerOffset;
       _dragHoverItemId = _findDragHoverItemId(dragRect);
     });
   }
@@ -1791,8 +1858,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
     final Offset localPosition = _getHomePanelLocalPosition(globalPosition);
     final Offset previewTopLeft =
-        localPosition - _dragPreviewSize.center(Offset.zero);
-    final Rect dragRect = previewTopLeft & _dragPreviewSize;
+        localPosition -
+        (_dragPointerOffset ?? _dragPreviewSize.center(Offset.zero));
+    final Rect dragRect = _getScaledDragRect(previewTopLeft, _dragPreviewSize);
 
     setState(() {
       _dragPreviewLocalTopLeft = previewTopLeft;
@@ -1803,17 +1871,122 @@ class _NoteHomePageState extends State<NoteHomePage> {
   /*
    * 结束拖动浏览项。
    */
-  void _finishDraggingBrowserItem() {
-    if (_draggingBrowserItem == null) {
+  Future<void> _finishDraggingBrowserItem({bool performDrop = true}) async {
+    final NoteGridItem? sourceItem = _draggingBrowserItem;
+    final String? targetItemId = _dragHoverItemId;
+    NoteGridItem? targetItem;
+
+    if (sourceItem == null) {
       return;
     }
 
+    if (performDrop && targetItemId != null) {
+      for (final NoteGridItem item in _buildGridItems()) {
+        if (item.id == targetItemId) {
+          targetItem = item;
+          break;
+        }
+      }
+    }
+
     setState(() {
+      _pressedBrowserItemId = null;
       _draggingBrowserItem = null;
       _dragPreviewLocalTopLeft = null;
+      _dragPointerOffset = null;
       _dragPreviewSize = Size.zero;
       _dragHoverItemId = null;
     });
+
+    if (!performDrop || targetItem == null) {
+      return;
+    }
+
+    if (targetItem.type == NoteGridItemType.folder) {
+      await _moveDraggedItemToFolder(sourceItem, targetItem);
+      return;
+    }
+
+    if (sourceItem.type == NoteGridItemType.note) {
+      await _createFolderForDraggedNotes(sourceItem, targetItem);
+    }
+  }
+
+  /*
+   * 将拖动项移动到目标文件夹。
+   */
+  Future<void> _moveDraggedItemToFolder(
+    NoteGridItem sourceItem,
+    NoteGridItem targetFolderItem,
+  ) async {
+    try {
+      if (sourceItem.type == NoteGridItemType.note) {
+        await _noteStorageService.moveNoteToDirectory(
+          sourceItem.note!,
+          targetFolderItem.locationText,
+        );
+      } else {
+        await _noteStorageService.moveFolderToDirectory(
+          sourceItem.locationText,
+          targetFolderItem.locationText,
+        );
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(_exitSelectionMode);
+      await _reloadNotes();
+    } catch (error) {
+      await _showMessageDialog('移动失败', error.toString());
+    }
+  }
+
+  /*
+   * 为两条拖拽合并的笔记创建文件夹并完成移动。
+   */
+  Future<void> _createFolderForDraggedNotes(
+    NoteGridItem sourceNoteItem,
+    NoteGridItem targetNoteItem,
+  ) async {
+    final String? folderName = await _showCreateFolderDialog();
+
+    if (folderName == null || folderName.isEmpty) {
+      return;
+    }
+
+    try {
+      final String parentDirectoryPath = _activeCategoryId == 'all'
+          ? _activeDirectoryPath
+          : '';
+      final String nextFolderPath = await _noteStorageService.createFolder(
+        parentDirectoryPath,
+        folderName,
+      );
+
+      await _noteStorageService.moveNoteToDirectory(
+        sourceNoteItem.note!,
+        nextFolderPath,
+      );
+      await _noteStorageService.moveNoteToDirectory(
+        targetNoteItem.note!,
+        nextFolderPath,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _exitSelectionMode();
+        _activeCategoryId = 'all';
+        _activeDirectoryPath = parentDirectoryPath;
+      });
+      await _reloadNotes();
+    } catch (error) {
+      await _showMessageDialog('创建失败', error.toString());
+    }
   }
 
   /*
@@ -2375,33 +2548,39 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Widget _buildBrowserItemShell({
     required NoteGridItem item,
     required Widget child,
-    double borderRadius = 24,
+    double borderRadius = 18,
   }) {
     final bool isHoverTarget = _dragHoverItemId == item.id;
     final bool isDraggingItem = _draggingBrowserItem?.id == item.id;
+    final bool isPressedItem = _pressedBrowserItemId == item.id;
 
-    return AnimatedOpacity(
-      opacity: isDraggingItem ? 0 : 1,
-      duration: const Duration(milliseconds: 90),
-      curve: Curves.easeOutCubic,
-      child: AnimatedScale(
-        scale: isHoverTarget ? 0.96 : 1,
-        duration: const Duration(milliseconds: 140),
+    return SizedBox(
+      key: _getBrowserItemKey(item.id),
+      child: AnimatedOpacity(
+        opacity: isDraggingItem ? 0 : 1,
+        duration: const Duration(milliseconds: 90),
         curve: Curves.easeOutCubic,
-        child: AnimatedContainer(
-          key: _getBrowserItemKey(item.id),
-          duration: const Duration(milliseconds: 140),
+        child: AnimatedScale(
+          scale: isPressedItem
+              ? _dragCardScale
+              : (isHoverTarget ? _dragCardScale : 1),
+          alignment: Alignment.center,
+          duration: Duration(milliseconds: isPressedItem ? 80 : 140),
           curve: Curves.easeOutCubic,
-          foregroundDecoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(
-              color: isHoverTarget
-                  ? const Color(0xFFFFC000)
-                  : Colors.transparent,
-              width: 3,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            foregroundDecoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(borderRadius),
+              border: Border.all(
+                color: isHoverTarget
+                    ? const Color(0xFFFFC000)
+                    : Colors.transparent,
+                width: 3,
+              ),
             ),
+            child: child,
           ),
-          child: child,
         ),
       ),
     );
@@ -2411,118 +2590,24 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 构建拖动中的文件夹预览。
    */
   Widget _buildDraggingFolderPreview(NoteGridItem item) {
-    return Container(
-      // 拖动文件夹预览容器样式
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x26000000),
-            blurRadius: 24,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-      child: Row(
-        // 拖动文件夹预览横向布局样式
-        children: <Widget>[
-          _buildFolderIcon(size: 50),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              // 拖动文件夹预览文字纵向布局样式
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  // 拖动文件夹预览标题样式
-                  style: const TextStyle(
-                    color: Color(0xFF111111),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${item.noteCount}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  // 拖动文件夹预览数量样式
-                  style: const TextStyle(
-                    color: Color(0xFF888888),
-                    fontSize: 17,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+    return _activeViewMode == NoteViewMode.list
+        ? _buildFolderListRow(item)
+        : _buildFolderCard(item);
   }
 
   /*
    * 构建拖动中的笔记预览。
    */
   Widget _buildDraggingNotePreview(NoteGridItem item) {
-    final NoteItem note = item.note!;
-
-    return Container(
-      // 拖动笔记预览容器样式
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x26000000),
-            blurRadius: 24,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
-      child: Column(
-        // 拖动笔记预览纵向布局样式
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            note.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            // 拖动笔记预览标题样式
-            style: const TextStyle(
-              color: Color(0xFF111111),
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            note.preview,
-            maxLines: 4,
-            overflow: TextOverflow.ellipsis,
-            // 拖动笔记预览摘要样式
-            style: const TextStyle(
-              color: Color(0xFF666666),
-              fontSize: 16,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _formatNoteCardDate(note.updatedAt),
-            // 拖动笔记预览日期样式
-            style: const TextStyle(color: Color(0xFF9B9B9B), fontSize: 15),
-          ),
-        ],
-      ),
-    );
+    return _activeViewMode == NoteViewMode.list
+        ? _buildNoteListRow(
+            item,
+            isWideLayout: MediaQuery.of(context).size.width >= 980,
+          )
+        : _buildNoteCard(
+            item,
+            isWideLayout: MediaQuery.of(context).size.width >= 980,
+          );
   }
 
   /*
@@ -2541,10 +2626,36 @@ class _NoteHomePageState extends State<NoteHomePage> {
       top: topLeft.dy,
       width: _dragPreviewSize.width,
       child: IgnorePointer(
-        child: Opacity(
-          opacity: 0.94,
-          child: Transform.scale(
-            scale: 1.02,
+        child: Transform.scale(
+          scale: _dragCardScale,
+          alignment: Alignment.center,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              // 拖动预览四向阴影样式，下方最深、左右一致、上方最浅。
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Color(0x26000000),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+                BoxShadow(
+                  color: Color(0x18000000),
+                  blurRadius: 16,
+                  offset: Offset(6, 0),
+                ),
+                BoxShadow(
+                  color: Color(0x18000000),
+                  blurRadius: 16,
+                  offset: Offset(-6, 0),
+                ),
+                BoxShadow(
+                  color: Color(0x0C000000),
+                  blurRadius: 11,
+                  offset: Offset(0, -4),
+                ),
+              ],
+            ),
             child: item.type == NoteGridItemType.folder
                 ? _buildDraggingFolderPreview(item)
                 : _buildDraggingNotePreview(item),
@@ -2641,6 +2752,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
         : item.locationText.split('/').last;
 
     return GestureDetector(
+      onTapDown: (_) {
+        _startPressingBrowserItem(item.id);
+      },
+      onTapUp: (_) {
+        _finishPressingBrowserItem(item.id);
+      },
+      onTapCancel: () {
+        _finishPressingBrowserItem(item.id);
+      },
       onTap: () {
         if (_isSelectionMode) {
           _toggleSelectedItem(item.id);
@@ -2659,7 +2779,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _finishDraggingBrowserItem();
       },
       onLongPressCancel: () {
-        _finishDraggingBrowserItem();
+        _finishDraggingBrowserItem(performDrop: false);
       },
       child: Container(
         // 文件夹卡片容器样式
@@ -2734,6 +2854,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
     final bool isSelected = _selectedItemIds.contains(item.id);
 
     return GestureDetector(
+      onTapDown: (_) {
+        _startPressingBrowserItem(item.id);
+      },
+      onTapUp: (_) {
+        _finishPressingBrowserItem(item.id);
+      },
+      onTapCancel: () {
+        _finishPressingBrowserItem(item.id);
+      },
       onTap: () {
         _handleSelectNote(note, isWideLayout: isWideLayout);
       },
@@ -2747,7 +2876,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _finishDraggingBrowserItem();
       },
       onLongPressCancel: () {
-        _finishDraggingBrowserItem();
+        _finishDraggingBrowserItem(performDrop: false);
       },
       child: Container(
         // 笔记卡片容器样式
@@ -2825,6 +2954,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
         : item.locationText.split('/').last;
 
     return GestureDetector(
+      onTapDown: (_) {
+        _startPressingBrowserItem(item.id);
+      },
+      onTapUp: (_) {
+        _finishPressingBrowserItem(item.id);
+      },
+      onTapCancel: () {
+        _finishPressingBrowserItem(item.id);
+      },
       onTap: () {
         if (_isSelectionMode) {
           _toggleSelectedItem(item.id);
@@ -2843,7 +2981,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _finishDraggingBrowserItem();
       },
       onLongPressCancel: () {
-        _finishDraggingBrowserItem();
+        _finishDraggingBrowserItem(performDrop: false);
       },
       child: Container(
         // 文件夹列表行容器样式
@@ -2918,6 +3056,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
     final bool isSelected = _selectedItemIds.contains(item.id);
 
     return GestureDetector(
+      onTapDown: (_) {
+        _startPressingBrowserItem(item.id);
+      },
+      onTapUp: (_) {
+        _finishPressingBrowserItem(item.id);
+      },
+      onTapCancel: () {
+        _finishPressingBrowserItem(item.id);
+      },
       onTap: () {
         _handleSelectNote(note, isWideLayout: isWideLayout);
       },
@@ -2931,7 +3078,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _finishDraggingBrowserItem();
       },
       onLongPressCancel: () {
-        _finishDraggingBrowserItem();
+        _finishDraggingBrowserItem(performDrop: false);
       },
       child: Container(
         // 笔记列表行容器样式
