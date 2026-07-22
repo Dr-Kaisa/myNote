@@ -2003,8 +2003,12 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
   /*
    * 移动当前选择项到目标文件夹。
+   * keepCurrentDirectory 为 true 时，移动完成后继续停留在当前目录。
    */
-  Future<void> _moveSelectedItemsToDirectory(String targetDirectoryPath) async {
+  Future<void> _moveSelectedItemsToDirectory(
+    String targetDirectoryPath, {
+    bool keepCurrentDirectory = false,
+  }) async {
     try {
       for (final NoteItem note in _getSelectedNotes()) {
         await _noteStorageService.moveNoteToDirectory(
@@ -2026,7 +2030,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
       setState(() {
         _exitSelectionMode();
-        _activeDirectoryPath = targetDirectoryPath;
+        if (!keepCurrentDirectory) {
+          _activeDirectoryPath = targetDirectoryPath;
+        }
       });
 
       await _reloadNotes();
@@ -3343,7 +3349,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           subtitle: '移动到全部笔记根目录',
           onTap: () async {
             Navigator.of(sheetContext).pop();
-            await _moveSelectedItemsToDirectory('');
+            await _moveSelectedItemsToDirectory('', keepCurrentDirectory: true);
           },
         ),
       ...targetFolders.map(
@@ -3664,7 +3670,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 child: CircularProgressIndicator(color: Color(0xFFFFC000)),
               )
             : SafeArea(child: _buildBody()),
-        floatingActionButton: _isSelectionMode
+        floatingActionButton:
+            _isSelectionMode || (!isWideLayout && !_isCompactBrowserVisible)
             ? null
             : FloatingActionButton(
                 onPressed: () {
