@@ -6,8 +6,14 @@
  * 2. MyNoteApp 是整个应用最外层的界面配置。
  * 3. FilePermissionGate 是权限门禁，没权限时先显示授权页，有权限后才显示笔记主页。
  */
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart';
+import 'package:flutter/services.dart';
+import 'package:my_note/services/app_cache_service.dart';
 import 'package:my_note/services/file_permission_service.dart';
+import 'package:my_note/theme/app_theme.dart';
 import 'package:my_note/widgets/note_home_page.dart';
 
 /*
@@ -16,21 +22,117 @@ import 'package:my_note/widgets/note_home_page.dart';
  * runApp 会把一个 Widget 挂到屏幕上。
  * Widget 可以理解成 Flutter 的“界面积木”，整个页面就是很多 Widget 嵌套出来的。
  */
-void main() {
-  runApp(const MyNoteApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 启动前读取主题偏好，避免暗色模式用户先看到白色页面闪烁。
+  runApp(
+    MyNoteApp(
+      initialDarkMode: (await AppCacheService().loadCache()).isDarkMode,
+    ),
+  );
 }
 
 /*
  * 应用根组件。
  *
- * StatelessWidget 表示这个组件自身不保存会变化的状态。
- * 它只根据 build 方法里写的配置生成界面。
+ * StatefulWidget 用于保存当前主题模式，并在切换时刷新整个应用。
  */
-class MyNoteApp extends StatelessWidget {
+class MyNoteApp extends StatefulWidget {
   /*
    * 根组件构造方法。
    */
-  const MyNoteApp({super.key});
+  const MyNoteApp({this.initialDarkMode = false, super.key});
+
+  /*
+   * 应用启动时是否使用暗色模式。
+   */
+  final bool initialDarkMode;
+
+  /*
+   * 创建应用根组件状态对象。
+   */
+  @override
+  State<MyNoteApp> createState() => _MyNoteAppState();
+}
+
+/*
+ * 应用根组件状态对象。
+ */
+class _MyNoteAppState extends State<MyNoteApp> {
+  /*
+   * 应用缓存服务实例。
+   */
+  final AppCacheService _appCacheService = AppCacheService();
+
+  /*
+   * 当前是否启用暗色模式。
+   */
+  late bool _isDarkMode;
+
+  /*
+   * 初始化应用主题状态。
+   */
+  @override
+  void initState() {
+    super.initState();
+    _isDarkMode = widget.initialDarkMode;
+  }
+
+  /*
+   * 处理首页发出的主题切换请求。
+   */
+  void _handleThemeModeChanged(bool isDarkMode) {
+    if (_isDarkMode == isDarkMode) {
+      return;
+    }
+
+    setState(() {
+      _isDarkMode = isDarkMode;
+    });
+    unawaited(_saveThemeMode(isDarkMode));
+  }
+
+  /*
+   * 保存主题模式，同时保留首页已有缓存字段。
+   */
+  Future<void> _saveThemeMode(bool isDarkMode) async {
+    try {
+      final AppCacheData appCache = await _appCacheService.loadCache();
+      await _appCacheService.saveCache(
+        AppCacheData(
+          folderVisitCounts: appCache.folderVisitCounts,
+          sortMode: appCache.sortMode,
+          viewMode: appCache.viewMode,
+          isDarkMode: isDarkMode,
+        ),
+      );
+    } catch (error) {
+      // 主题缓存失败不影响本次切换，后续切换会继续尝试保存。
+    }
+  }
+
+  /*
+   * 构建会跟随主题变化的系统状态栏与底部导航栏。
+   */
+  Widget _buildSystemUi(BuildContext context, Widget? child) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final ColorScheme colors = Theme.of(context).colorScheme;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        // 系统状态栏与导航栏样式
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+        statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+        systemNavigationBarColor: colors.surface,
+        systemNavigationBarDividerColor: colors.surface,
+        systemNavigationBarIconBrightness: isDark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+      child: child ?? const SizedBox.shrink(),
+    );
+  }
 
   /*
    * 构建应用根节点。
@@ -45,17 +147,28 @@ class MyNoteApp extends StatelessWidget {
       title: 'myNote',
       // 关闭右上角 debug 标识，让调试包界面看起来接近正式应用。
       debugShowCheckedModeBanner: false,
-      // ThemeData 是全局主题配置，负责默认颜色、Material 版本等基础样式。
-      theme: ThemeData(
-        // 从黄色种子色生成一套 Material 颜色。
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF3B12E)),
-        // 全局 Scaffold 默认背景色。
-        scaffoldBackgroundColor: const Color(0xFFF5F6FA),
-        // 启用 Material 3 风格组件。
-        useMaterial3: true,
-      ),
+      // 注册 Quill 编辑器本地化代理，让复制、粘贴等系统菜单显示正确文案。
+      localizationsDelegates: FlutterQuillLocalizations.localizationsDelegates,
+      // 声明 Quill 编辑器支持的本地化语言集合。
+      supportedLocales: FlutterQuillLocalizations.supportedLocales,
+      // 白天模式全局主题样式
+      theme: AppTheme.lightTheme,
+      // 暗色模式全局主题样式
+      darkTheme: AppTheme.darkTheme,
+      // 根据首页开关选择当前主题模式。
+      themeMode: _isDarkMode ? ThemeMode.dark : ThemeMode.light,
+      // 主题切换动画样式
+      themeAnimationDuration: const Duration(milliseconds: 220),
+      themeAnimationCurve: Curves.easeOutCubic,
+      // 同步移动端系统栏的亮暗样式。
+      builder: _buildSystemUi,
       // home 是应用打开后的第一个页面；这里先进入权限门禁，再进入笔记主页。
-      home: const FilePermissionGate(child: NoteHomePage()),
+      home: FilePermissionGate(
+        child: NoteHomePage(
+          isDarkMode: _isDarkMode,
+          onThemeModeChanged: _handleThemeModeChanged,
+        ),
+      ),
     );
   }
 }
@@ -278,9 +391,11 @@ class _FilePermissionGateState extends State<FilePermissionGate>
    * SafeArea 会避开状态栏、刘海和底部导航栏，避免内容被系统 UI 挡住。
    */
   Widget _buildPermissionPage() {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+
     return Scaffold(
       // 权限页背景色样式
-      backgroundColor: const Color(0xFFF6F6F6),
+      backgroundColor: colors.surfaceContainerLow,
       body: SafeArea(
         child: Center(
           // Center 把里面的授权提示整体放到屏幕中间。
@@ -292,19 +407,19 @@ class _FilePermissionGateState extends State<FilePermissionGate>
               // Column 表示从上到下排列 children 里的组件。
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                const Icon(
+                Icon(
                   Icons.folder_open_rounded,
                   // 权限页图标颜色样式
-                  color: Color(0xFFFFC000),
+                  color: colors.primary,
                   size: 72,
                 ),
                 const SizedBox(height: 18),
-                const Text(
+                Text(
                   '需要所有文件权限',
                   textAlign: TextAlign.center,
                   // 权限页标题文字样式
                   style: TextStyle(
-                    color: Color(0xFF111111),
+                    color: colors.onSurface,
                     fontSize: 24,
                     fontWeight: FontWeight.w700,
                   ),
@@ -314,8 +429,8 @@ class _FilePermissionGateState extends State<FilePermissionGate>
                   _permissionStatusText,
                   textAlign: TextAlign.center,
                   // 权限页状态文字样式
-                  style: const TextStyle(
-                    color: Color(0xFF666666),
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
                     fontSize: 15,
                     height: 1.5,
                   ),
@@ -328,8 +443,8 @@ class _FilePermissionGateState extends State<FilePermissionGate>
                       : _handlePermissionButtonPressed,
                   // 权限页授权按钮样式
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFFC000),
-                    foregroundColor: Colors.white,
+                    backgroundColor: colors.primary,
+                    foregroundColor: colors.onPrimary,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 28,
                       vertical: 14,

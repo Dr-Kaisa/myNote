@@ -1,3 +1,4 @@
+# 文件说明：Flutter 项目配置文件，负责声明应用信息、运行环境和依赖资源。
 name: my_note
 description: "一个基于 Flutter 的 Markdown 笔记原型。"
 # The following line prevents the package from being accidentally published to
@@ -34,6 +35,11 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
+  # 自定义 SVG 图标渲染依赖。
+  flutter_svg: ^2.2.3
+  flutter_quill: ^11.5.1
+  markdown: ^7.3.1
+  markdown_quill: ^4.3.0
   path: ^1.9.1
   path_provider: ^2.1.6
 
@@ -58,6 +64,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # 左上角返回按钮使用的自定义 SVG 图标资源。
+  assets:
+    - assets/icon/left_arrow.svg
 
   # To add assets to your application, add an assets section, like this:
   # assets:

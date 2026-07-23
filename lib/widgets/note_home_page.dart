@@ -14,11 +14,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:my_note/controllers/markdown_editor_controller.dart';
 import 'package:my_note/models/note_item.dart';
 import 'package:my_note/services/app_cache_service.dart';
 import 'package:my_note/services/note_storage_service.dart';
 import 'package:my_note/utils/markdown_helper.dart';
 import 'package:my_note/widgets/markdown_toolbar.dart';
+import 'package:my_note/widgets/wysiwyg_markdown_editor.dart';
 
 /*
  * 首页分类项数据模型。
@@ -156,7 +160,21 @@ class NoteHomePage extends StatefulWidget {
   /*
    * 笔记主页构造方法。
    */
-  const NoteHomePage({super.key});
+  const NoteHomePage({
+    required this.isDarkMode,
+    required this.onThemeModeChanged,
+    super.key,
+  });
+
+  /*
+   * 当前是否启用暗色模式。
+   */
+  final bool isDarkMode;
+
+  /*
+   * 主题模式切换回调。
+   */
+  final ValueChanged<bool> onThemeModeChanged;
 
   /*
    * 创建笔记主页状态对象。
@@ -180,6 +198,8 @@ class NoteSettingsPage extends StatelessWidget {
    * 构建设置页标题栏。
    */
   Widget _buildHeader(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+
     return Padding(
       // 设置页标题栏外边距样式
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
@@ -191,17 +211,17 @@ class NoteSettingsPage extends StatelessWidget {
               Navigator.of(context).pop();
             },
             icon: const Icon(Icons.arrow_back_rounded),
-            color: const Color(0xFF111111),
+            color: colors.onSurface,
           ),
           const SizedBox(width: 8),
-          const Expanded(
+          Expanded(
             child: Text(
               '设置',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               // 设置页标题文字样式
               style: TextStyle(
-                color: Color(0xFF111111),
+                color: colors.onSurface,
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
               ),
@@ -215,7 +235,9 @@ class NoteSettingsPage extends StatelessWidget {
   /*
    * 构建设置页空状态内容。
    */
-  Widget _buildEmptyContent() {
+  Widget _buildEmptyContent(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+
     return Expanded(
       child: Center(
         child: Padding(
@@ -224,31 +246,31 @@ class NoteSettingsPage extends StatelessWidget {
           child: Column(
             // 设置页空状态纵向布局样式
             mainAxisSize: MainAxisSize.min,
-            children: const <Widget>[
+            children: <Widget>[
               Icon(
                 Icons.settings_rounded,
                 // 设置页空状态图标样式
-                color: Color(0xFFFFC000),
+                color: colors.primary,
                 size: 58,
               ),
-              SizedBox(height: 14),
+              const SizedBox(height: 14),
               Text(
                 '设置',
                 textAlign: TextAlign.center,
                 // 设置页空状态标题样式
                 style: TextStyle(
-                  color: Color(0xFF222222),
+                  color: colors.onSurface,
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              SizedBox(height: 8),
+              const SizedBox(height: 8),
               Text(
                 '后续设置项会放在这里',
                 textAlign: TextAlign.center,
                 // 设置页空状态说明样式
                 style: TextStyle(
-                  color: Color(0xFF777777),
+                  color: colors.onSurfaceVariant,
                   fontSize: 15,
                   height: 1.5,
                 ),
@@ -267,12 +289,15 @@ class NoteSettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       // 设置页背景色样式
-      backgroundColor: const Color(0xFFF0F1F3),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: SafeArea(
         child: Column(
           // 设置页根内容纵向布局样式
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[_buildHeader(context), _buildEmptyContent()],
+          children: <Widget>[
+            _buildHeader(context),
+            _buildEmptyContent(context),
+          ],
         ),
       ),
     );
@@ -282,7 +307,13 @@ class NoteSettingsPage extends StatelessWidget {
 /*
  * 笔记主页状态对象。
  */
-class _NoteHomePageState extends State<NoteHomePage> {
+class _NoteHomePageState extends State<NoteHomePage>
+    with WidgetsBindingObserver {
+  /*
+   * 获取当前主题语义颜色。
+   */
+  ColorScheme get _colors => Theme.of(context).colorScheme;
+
   /*
    * 按压、拖拽和命中目标时统一使用的卡片缩放比例。
    */
@@ -301,12 +332,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
   /*
    * 编辑器控制器。
    */
-  final TextEditingController _editorController = TextEditingController();
+  final MarkdownEditorController _editorController = MarkdownEditorController();
 
   /*
    * 编辑器焦点控制器。
    */
   final FocusNode _editorFocusNode = FocusNode();
+
+  /*
+   * 编辑器滚动控制器。
+   */
+  final ScrollController _editorScrollController = ScrollController();
 
   /*
    * 更多菜单按钮定位标识。
@@ -439,13 +475,41 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Timer? _saveTimer;
 
   /*
+   * 当前串行保存任务。
+   *
+   * 后一次保存会等待前一次完成，避免标题重命名时并发写出重复文件。
+   */
+  Future<bool> _saveQueue = Future<bool>.value(true);
+
+  /*
+   * 保存后发生重命名的笔记路径映射。
+   *
+   * 队列里的后续保存可以通过旧路径找到上一轮保存生成的新路径。
+   */
+  final Map<String, NoteItem> _latestSavedNotes = <String, NoteItem>{};
+
+  /*
    * 页面初始化逻辑。
    */
   @override
   void initState() {
     super.initState();
+    // 注册应用生命周期监听，在应用切到后台前尽快保存当前编辑内容。
+    WidgetsBinding.instance.addObserver(this);
     _initializeNotes();
     _editorController.addListener(_handleEditorTextChanged);
+  }
+
+  /*
+   * 应用离开前台时立即提交尚未触发的延迟保存。
+   */
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(_flushPendingEditorSave().then<void>((_) {}));
+    }
   }
 
   /*
@@ -454,10 +518,22 @@ class _NoteHomePageState extends State<NoteHomePage> {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    if (_activeNote != null &&
+        _editorController.markdownText != _activeNote!.content) {
+      // 页面销毁时再提交一次当前快照，尽量避免最后 500 毫秒的输入丢失。
+      unawaited(
+        _queueNoteSave(
+          _activeNote!,
+          _editorController.markdownText,
+        ).then<void>((_) {}),
+      );
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _hideMoreMenu(animate: false);
     _editorController.removeListener(_handleEditorTextChanged);
     _editorController.dispose();
     _editorFocusNode.dispose();
+    _editorScrollController.dispose();
     super.dispose();
   }
 
@@ -490,9 +566,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _categoryFolderPaths = _buildCategoryFolderPaths(folderPaths);
         _activeNote = notes.isNotEmpty ? notes.first : null;
         _activeDirectoryPath = '';
-        _editorController.text = notes.isNotEmpty ? notes.first.content : '';
-        _editorController.selection = TextSelection.collapsed(
-          offset: _editorController.text.length,
+        _editorController.loadMarkdown(
+          notes.isNotEmpty ? notes.first.content : '',
         );
         _saveStatusText = notes.isNotEmpty ? '已保存' : '没有可编辑的笔记';
         _isLoading = false;
@@ -514,7 +589,14 @@ class _NoteHomePageState extends State<NoteHomePage> {
   /*
    * 重新读取笔记与文件夹列表。
    */
-  Future<void> _reloadNotes({bool keepDirectory = true}) async {
+  Future<void> _reloadNotes({
+    bool keepDirectory = true,
+    bool flushEditor = true,
+  }) async {
+    if (flushEditor && !await _flushPendingEditorSave()) {
+      return;
+    }
+
     final List<NoteItem> notes = await _noteStorageService.loadNotes();
     final List<String> folderPaths = await _noteStorageService
         .loadFolderPaths();
@@ -533,17 +615,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
     setState(() {
       _notes = notes;
       _folderPaths = folderPaths;
+      _latestSavedNotes.clear();
       _activeNote = nextActiveNote;
       if (!keepDirectory) {
         _activeDirectoryPath = '';
       }
       if (nextActiveNote != null) {
-        _editorController.text = nextActiveNote.content;
-        _editorController.selection = TextSelection.collapsed(
-          offset: _editorController.text.length,
-        );
+        _editorController.loadMarkdown(nextActiveNote.content);
       } else {
-        _editorController.clear();
+        _editorController.loadMarkdown('');
       }
     });
   }
@@ -710,7 +790,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
               },
               child: Container(
                 // 更多菜单外部遮罩背景样式。
-                color: const Color(0x33000000),
+                color: _colors.scrim.withValues(alpha: 0.2),
               ),
             ),
           ),
@@ -751,9 +831,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
   Widget _buildMoreMenuPanel({required bool isWideLayout}) {
     return Material(
       // 更多菜单面板材质样式
-      color: Colors.white,
+      color: _colors.surfaceContainerLowest,
       elevation: 18,
-      shadowColor: const Color(0x33000000),
+      shadowColor: _colors.shadow.withValues(alpha: 0.2),
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -770,7 +850,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             value: 'settings',
             isWideLayout: isWideLayout,
           ),
-          const Divider(height: 1, color: Color(0xFFEAEAEA)),
+          Divider(height: 1, color: _colors.outlineVariant),
           _buildMoreMenuItem(
             label: '按名称排序',
             value: 'sortName',
@@ -822,19 +902,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   overflow: TextOverflow.ellipsis,
                   // 更多菜单选项文字样式
                   style: TextStyle(
-                    color: isSelected
-                        ? const Color(0xFFB88900)
-                        : const Color(0xFF222222),
+                    color: isSelected ? _colors.tertiary : _colors.onSurface,
                     fontSize: 16,
                     fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
               ),
               if (isSelected)
-                const Icon(
+                Icon(
                   Icons.check_rounded,
                   // 更多菜单选中图标颜色样式
-                  color: Color(0xFFB88900),
+                  color: _colors.tertiary,
                   size: 22,
                 ),
             ],
@@ -954,6 +1032,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           folderVisitCounts: Map<String, int>.from(_folderVisitCounts),
           sortMode: _activeSortMode.name,
           viewMode: _activeViewMode.name,
+          isDarkMode: widget.isDarkMode,
         ),
       );
     } catch (error) {
@@ -1343,6 +1422,25 @@ class _NoteHomePageState extends State<NoteHomePage> {
   }
 
   /*
+   * 判断当前编辑笔记是否包含在待删除的选择项中。
+   */
+  bool _isActiveNoteIncludedInSelection() {
+    if (_activeNote == null) {
+      return false;
+    }
+
+    if (_selectedItemIds.contains('note:${_activeNote!.relativePath}')) {
+      return true;
+    }
+
+    return _getSelectedFolderPaths().any(
+      (String folderPath) =>
+          _activeNote!.directoryPath == folderPath ||
+          _activeNote!.directoryPath.startsWith('$folderPath/'),
+    );
+  }
+
+  /*
    * 获取文件夹的父级目录路径。
    */
   String _getParentDirectoryPath(String folderPath) {
@@ -1406,9 +1504,35 @@ class _NoteHomePageState extends State<NoteHomePage> {
     });
 
     _saveTimer?.cancel();
+    final NoteItem noteToSave = _activeNote!;
+    final String contentToSave = _editorController.markdownText;
     _saveTimer = Timer(const Duration(milliseconds: 500), () {
-      _persistActiveNote(_editorController.text);
+      unawaited(_queueNoteSave(noteToSave, contentToSave).then<void>((_) {}));
     });
+  }
+
+  /*
+   * 取消延迟等待并立即保存当前编辑器快照。
+   */
+  Future<bool> _flushPendingEditorSave() async {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+
+    if (_activeNote == null) {
+      return _saveQueue;
+    }
+
+    return _queueNoteSave(_activeNote!, _editorController.markdownText);
+  }
+
+  /*
+   * 锁定或恢复编辑器交互，防止文件移动或页面切换期间继续产生新输入。
+   */
+  void _setEditorInteractionLocked(bool isLocked) {
+    _editorController.quillController.readOnly = isLocked;
+    if (isLocked) {
+      _editorFocusNode.unfocus();
+    }
   }
 
   /*
@@ -1417,10 +1541,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
   void _activateNote(NoteItem note, {required bool isWideLayout}) {
     setState(() {
       _activeNote = note;
-      _editorController.text = note.content;
-      _editorController.selection = TextSelection.collapsed(
-        offset: _editorController.text.length,
-      );
+      _editorController.loadMarkdown(note.content);
       _saveStatusText = '已保存';
       if (!isWideLayout) {
         _isCompactBrowserVisible = false;
@@ -1470,6 +1591,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
     }
 
     if (!isWideLayout && !_isCompactBrowserVisible) {
+      _editorFocusNode.unfocus();
+      unawaited(_flushPendingEditorSave().then<void>((_) {}));
       setState(() {
         _isCompactBrowserVisible = true;
       });
@@ -1485,7 +1608,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 创建新的笔记。
    */
   Future<void> _handleCreateNote({required bool isWideLayout}) async {
+    _setEditorInteractionLocked(true);
     try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
       final String targetDirectoryPath = _activeCategoryId == 'all'
           ? _activeDirectoryPath
           : (_activeNote?.directoryPath ?? '');
@@ -1497,7 +1624,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         return;
       }
 
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
 
       setState(() {
         _activeCategoryId = 'all';
@@ -1508,6 +1635,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
       _editorFocusNode.requestFocus();
     } catch (error) {
       await _showMessageDialog('创建失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -1562,7 +1691,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return null;
     }
 
+    _setEditorInteractionLocked(true);
     try {
+      if (!await _flushPendingEditorSave()) {
+        return null;
+      }
       final String parentDirectoryPath = _activeCategoryId == 'all'
           ? _activeDirectoryPath
           : '';
@@ -1574,7 +1707,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       if (moveSelectedAfterCreate) {
         await _moveSelectedItemsToDirectory(nextFolderPath);
       } else {
-        await _reloadNotes();
+        await _reloadNotes(flushEditor: false);
         setState(() {
           _activeCategoryId = 'all';
           _activeDirectoryPath = parentDirectoryPath;
@@ -1585,6 +1718,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
     } catch (error) {
       await _showMessageDialog('创建失败', error.toString());
       return null;
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -1624,9 +1759,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return;
     }
 
+    _setEditorInteractionLocked(true);
     try {
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      await _saveQueue;
       await _noteStorageService.deleteNote(_activeNote!.relativePath);
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
 
       if (!mounted) {
         return;
@@ -1640,6 +1779,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
       });
     } catch (error) {
       await _showMessageDialog('删除失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -1655,15 +1796,30 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return;
     }
 
-    if (_activeNote != null && _activeNote!.relativePath != note.relativePath) {
-      await _persistActiveNote(_editorController.text);
-    }
-
-    if (!mounted) {
+    if (_activeNote?.relativePath == note.relativePath) {
+      if (!isWideLayout && _isCompactBrowserVisible) {
+        setState(() {
+          _isCompactBrowserVisible = false;
+        });
+      }
       return;
     }
 
-    _activateNote(note, isWideLayout: isWideLayout);
+    _setEditorInteractionLocked(true);
+    try {
+      if (_activeNote != null &&
+          !await _persistActiveNote(_editorController.markdownText)) {
+        return;
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      _activateNote(note, isWideLayout: isWideLayout);
+    } finally {
+      _setEditorInteractionLocked(false);
+    }
   }
 
   /*
@@ -1919,10 +2075,14 @@ class _NoteHomePageState extends State<NoteHomePage> {
     NoteGridItem sourceItem,
     NoteGridItem targetFolderItem,
   ) async {
+    _setEditorInteractionLocked(true);
     try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
       if (sourceItem.type == NoteGridItemType.note) {
         await _noteStorageService.moveNoteToDirectory(
-          sourceItem.note!,
+          _getLatestNoteForSave(sourceItem.note!),
           targetFolderItem.locationText,
         );
       } else {
@@ -1937,9 +2097,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       }
 
       setState(_exitSelectionMode);
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
     } catch (error) {
       await _showMessageDialog('移动失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -1956,7 +2118,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return;
     }
 
+    _setEditorInteractionLocked(true);
     try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
       final String parentDirectoryPath = _activeCategoryId == 'all'
           ? _activeDirectoryPath
           : '';
@@ -1966,11 +2132,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       );
 
       await _noteStorageService.moveNoteToDirectory(
-        sourceNoteItem.note!,
+        _getLatestNoteForSave(sourceNoteItem.note!),
         nextFolderPath,
       );
       await _noteStorageService.moveNoteToDirectory(
-        targetNoteItem.note!,
+        _getLatestNoteForSave(targetNoteItem.note!),
         nextFolderPath,
       );
 
@@ -1983,9 +2149,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _activeCategoryId = 'all';
         _activeDirectoryPath = parentDirectoryPath;
       });
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
     } catch (error) {
       await _showMessageDialog('创建失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -2009,7 +2177,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
     String targetDirectoryPath, {
     bool keepCurrentDirectory = false,
   }) async {
+    _setEditorInteractionLocked(true);
     try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
       for (final NoteItem note in _getSelectedNotes()) {
         await _noteStorageService.moveNoteToDirectory(
           note,
@@ -2035,9 +2207,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
         }
       });
 
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
     } catch (error) {
       await _showMessageDialog('移动失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -2077,7 +2251,18 @@ class _NoteHomePageState extends State<NoteHomePage> {
       return;
     }
 
+    _setEditorInteractionLocked(true);
     try {
+      if (_isActiveNoteIncludedInSelection()) {
+        _saveTimer?.cancel();
+        _saveTimer = null;
+        await _saveQueue;
+      } else {
+        if (!await _flushPendingEditorSave()) {
+          return;
+        }
+      }
+
       for (final NoteItem note in _getSelectedNotes()) {
         await _noteStorageService.deleteNote(note.relativePath);
       }
@@ -2091,9 +2276,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
       }
 
       setState(_exitSelectionMode);
-      await _reloadNotes();
+      await _reloadNotes(flushEditor: false);
     } catch (error) {
       await _showMessageDialog('删除失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
     }
   }
 
@@ -2118,65 +2305,133 @@ class _NoteHomePageState extends State<NoteHomePage> {
   /*
    * 保存当前激活笔记内容。
    */
-  Future<void> _persistActiveNote(String content) async {
+  Future<bool> _persistActiveNote(String content) async {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+
     if (_activeNote == null) {
-      return;
+      return _saveQueue;
     }
 
-    if (content == _activeNote!.content) {
-      if (mounted) {
+    return _queueNoteSave(_activeNote!, content);
+  }
+
+  /*
+   * 把指定笔记快照追加到串行保存队列。
+   */
+  Future<bool> _queueNoteSave(NoteItem note, String content) {
+    _saveQueue = _saveQueue.then((_) => _saveNoteSnapshot(note, content));
+    return _saveQueue;
+  }
+
+  /*
+   * 获取指定笔记在前一次保存重命名后的最新实体。
+   */
+  NoteItem _getLatestNoteForSave(NoteItem note) {
+    return _latestSavedNotes[note.relativePath] ?? note;
+  }
+
+  /*
+   * 判断指定保存任务是否仍对应当前正在编辑的笔记。
+   */
+  bool _isActiveSaveTarget(NoteItem requestedNote, NoteItem latestNote) {
+    return _activeNote?.relativePath == requestedNote.relativePath ||
+        _activeNote?.relativePath == latestNote.relativePath;
+  }
+
+  /*
+   * 执行单篇笔记快照保存，并只更新仍然匹配的界面状态。
+   */
+  Future<bool> _saveNoteSnapshot(NoteItem requestedNote, String content) async {
+    final NoteItem noteToSave = _getLatestNoteForSave(requestedNote);
+
+    if (content == noteToSave.content) {
+      if (mounted &&
+          _isActiveSaveTarget(requestedNote, noteToSave) &&
+          _editorController.markdownText == content) {
         setState(() {
           _saveStatusText = '已保存';
         });
       }
-      return;
+      return true;
     }
 
-    if (mounted) {
+    if (mounted && _isActiveSaveTarget(requestedNote, noteToSave)) {
       setState(() {
         _saveStatusText = '保存中...';
       });
     }
 
     try {
-      final String previousNotePath = _activeNote!.relativePath;
       final NoteItem savedNote = (await _noteStorageService.saveNoteContent(
-        _activeNote!.relativePath,
+        noteToSave.relativePath,
         content,
-      )).copyWith(createdAt: _activeNote!.createdAt);
+      )).copyWith(createdAt: noteToSave.createdAt);
+
+      _latestSavedNotes[requestedNote.relativePath] = savedNote;
+      _latestSavedNotes[noteToSave.relativePath] = savedNote;
 
       if (!mounted) {
-        return;
+        return true;
       }
 
+      final bool shouldUpdateActiveNote = _isActiveSaveTarget(
+        requestedNote,
+        noteToSave,
+      );
+
       setState(() {
-        _activeNote = savedNote;
         _notes =
             _notes
                 .map(
                   (NoteItem item) =>
-                      item.relativePath == previousNotePath ? savedNote : item,
+                      item.relativePath == requestedNote.relativePath ||
+                          item.relativePath == noteToSave.relativePath
+                      ? savedNote
+                      : item,
                 )
                 .toList()
               ..sort(_compareNotesBySortMode);
 
-        if (_activeCategoryId != 'all' &&
-            !savedNote.tags.contains(_activeCategoryId)) {
-          _activeCategoryId = 'all';
+        final bool wasSelected = _selectedItemIds.remove(
+          'note:${requestedNote.relativePath}',
+        );
+        final bool wasLatestPathSelected = _selectedItemIds.remove(
+          'note:${noteToSave.relativePath}',
+        );
+        if (wasSelected || wasLatestPathSelected) {
+          _selectedItemIds.add('note:${savedNote.relativePath}');
         }
 
-        _saveStatusText = '已保存';
+        if (shouldUpdateActiveNote) {
+          _activeNote = savedNote;
+          if (_activeCategoryId != 'all' &&
+              !savedNote.tags.contains(_activeCategoryId)) {
+            _activeCategoryId = 'all';
+          }
+          _saveStatusText = _editorController.markdownText == content
+              ? '已保存'
+              : '编辑中...';
+        }
       });
+      return true;
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
 
-      setState(() {
-        _saveStatusText = '保存失败';
-      });
+      if (_isActiveSaveTarget(requestedNote, noteToSave)) {
+        setState(() {
+          _saveStatusText = '保存失败';
+        });
+      }
 
-      await _showMessageDialog('保存失败', error.toString());
+      try {
+        await _showMessageDialog('保存失败', error.toString());
+      } catch (_) {
+        // 页面正在退出时弹窗可能无法展示，但保存失败结果仍要返回给调用方。
+      }
+      return false;
     }
   }
 
@@ -2184,45 +2439,38 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 执行 Markdown 工具栏操作。
    */
   void _handleToolbarAction(ToolbarActionKey actionKey) {
-    final TextSelection selection = _editorController.selection;
-    MarkdownEditResult result = MarkdownEditResult(
-      text: _editorController.text,
-      selection: selection,
-    );
-
-    switch (actionKey) {
-      case ToolbarActionKey.title:
-        result = applyLinePrefixSyntax(_editorController.text, selection, '# ');
-      case ToolbarActionKey.subtitle:
-        result = applyLinePrefixSyntax(
-          _editorController.text,
-          selection,
-          '## ',
-        );
-      case ToolbarActionKey.bold:
-        result = applyWrapSyntax(
-          _editorController.text,
-          selection,
-          '**',
-          '**',
-          '加粗内容',
-        );
-      case ToolbarActionKey.list:
-        result = applyLinePrefixSyntax(_editorController.text, selection, '- ');
-      case ToolbarActionKey.todo:
-        result = applyLinePrefixSyntax(
-          _editorController.text,
-          selection,
-          '- [ ] ',
-        );
-      case ToolbarActionKey.quote:
-        result = applyLinePrefixSyntax(_editorController.text, selection, '> ');
+    if (_editorController.quillController.readOnly) {
+      // 文件切换或移动期间忽略工具栏点击，避免锁定状态下继续修改正文。
+      return;
     }
 
-    _editorController.value = TextEditingValue(
-      text: result.text,
-      selection: result.selection,
-    );
+    _toggleEditorAttribute(switch (actionKey) {
+      ToolbarActionKey.title => Attribute.h1,
+      ToolbarActionKey.subtitle => Attribute.h2,
+      ToolbarActionKey.heading3 => Attribute.h3,
+      ToolbarActionKey.heading4 => Attribute.h4,
+      ToolbarActionKey.heading5 => Attribute.h5,
+      ToolbarActionKey.list => Attribute.ul,
+      ToolbarActionKey.orderedList => Attribute.ol,
+    });
+  }
+
+  /*
+   * 切换当前选区的 Quill 格式，并让输入焦点回到编辑器。
+   */
+  void _toggleEditorAttribute(Attribute<dynamic> attribute) {
+    _editorController.quillController
+      // 块级格式切换时避免重复请求键盘，减少移动端键盘抖动。
+      ..skipRequestKeyboard = !attribute.isInline
+      ..formatSelection(
+        _editorController.quillController
+                    .getSelectionStyle()
+                    .attributes[attribute.key]
+                    ?.value ==
+                attribute.value
+            ? Attribute.clone(attribute, null)
+            : attribute,
+      );
     _editorFocusNode.requestFocus();
   }
 
@@ -2245,29 +2493,29 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 });
               },
               icon: const Icon(Icons.arrow_back_rounded),
-              color: const Color(0xFF202020),
+              color: _colors.onSurface,
             ),
           Expanded(
             child: Column(
               // 顶部标题区纵向布局样式
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Row(
+                Row(
                   children: <Widget>[
                     Text(
                       '笔记',
                       // 顶部标题文字样式
                       style: TextStyle(
-                        color: Color(0xFF111111),
+                        color: _colors.onSurface,
                         fontSize: 34,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     Padding(
-                      padding: EdgeInsets.only(left: 4, top: 4),
+                      padding: const EdgeInsets.only(left: 4, top: 4),
                       child: Icon(
                         Icons.keyboard_arrow_down_rounded,
-                        color: Color(0xFF111111),
+                        color: _colors.onSurface,
                         size: 26,
                       ),
                     ),
@@ -2277,8 +2525,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 Text(
                   '${_notes.length}篇笔记',
                   // 顶部统计文字样式
-                  style: const TextStyle(
-                    color: Color(0xFF666666),
+                  style: TextStyle(
+                    color: _colors.onSurfaceVariant,
                     fontSize: 17,
                     fontWeight: FontWeight.w500,
                   ),
@@ -2287,15 +2535,37 @@ class _NoteHomePageState extends State<NoteHomePage> {
             ),
           ),
           Row(
-            // 顶部右侧操作按钮横向布局样式，只占搜索和更多按钮本身需要的宽度。
+            // 顶部右侧操作按钮横向布局样式，只占主题、搜索和更多按钮需要的宽度。
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
+              IconButton(
+                tooltip: widget.isDarkMode ? '切换到白天模式' : '切换到暗色模式',
+                onPressed: () {
+                  widget.onThemeModeChanged(!widget.isDarkMode);
+                },
+                icon: Icon(
+                  widget.isDarkMode
+                      ? Icons.light_mode_rounded
+                      : Icons.dark_mode_rounded,
+                ),
+                color: _colors.onSurface,
+                iconSize: 22,
+                // 主题切换按钮独立背景样式
+                style: IconButton.styleFrom(
+                  backgroundColor: _colors.surfaceContainerHigh,
+                ),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 44,
+                  height: 44,
+                ),
+              ),
               IconButton(
                 onPressed: () {
                   _showMessageDialog('搜索', '搜索功能后面再接。');
                 },
                 icon: const Icon(Icons.search_rounded),
-                color: const Color(0xFF111111),
+                color: _colors.onSurface,
                 iconSize: 30,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints.tightFor(
@@ -2307,7 +2577,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 IconButton(
                   onPressed: _selectAllVisibleItems,
                   icon: const Icon(Icons.checklist_rounded),
-                  color: const Color(0xFF222222),
+                  color: _colors.onSurface,
                   iconSize: 30,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints.tightFor(
@@ -2325,7 +2595,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                       onTap: () {
                         _showMoreMenu(isWideLayout: isWideLayout);
                       },
-                      child: const SizedBox(
+                      child: SizedBox(
                         // 三个点按钮实际占位样式，用 SizedBox 控制宽高比 constraints 更直接。
                         width: 70,
                         height: 44,
@@ -2333,7 +2603,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                           alignment: Alignment.center,
                           child: Icon(
                             Icons.more_vert_rounded,
-                            color: Color(0xFF1F1F1F),
+                            color: _colors.onSurface,
                             size: 22,
                           ),
                         ),
@@ -2410,7 +2680,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         decoration: BoxDecoration(
           // 分类文字按钮容器样式
-          color: isActive ? const Color(0xFFdfe0e2) : Colors.white,
+          color: isActive
+              ? _colors.surfaceContainerHighest
+              : _colors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(15),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2421,7 +2693,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
           overflow: TextOverflow.ellipsis,
           // 分类文字按钮文本样式
           style: TextStyle(
-            color: const Color(0xFF111111),
+            color: _colors.onSurface,
             fontSize: 16,
             fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
           ),
@@ -2459,7 +2731,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
         child: Text(
           '#$_activeCategoryId',
           // 标签路径栏样式
-          style: const TextStyle(color: Color(0xFF888888), fontSize: 14),
+          style: TextStyle(color: _colors.onSurfaceVariant, fontSize: 14),
         ),
       );
     }
@@ -2483,20 +2755,23 @@ class _NoteHomePageState extends State<NoteHomePage> {
             onTap: () {
               _handleDirectoryChanged('');
             },
-            child: const Text(
+            child: Text(
               '全部笔记',
               // 根路径文字样式
               style: TextStyle(
-                color: Color(0xFFFFB800),
+                color: _colors.tertiary,
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
               ),
             ),
           ),
           for (int index = 0; index < segments.length; index++) ...<Widget>[
-            const Text(
+            Text(
               '/',
-              style: TextStyle(color: Color(0xFFBBBBBB), fontSize: 14),
+              style: TextStyle(
+                color: _colors.onSurfaceVariant.withValues(alpha: 0.6),
+                fontSize: 14,
+              ),
             ),
             GestureDetector(
               onTap: () {
@@ -2505,8 +2780,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
               child: Text(
                 segments[index],
                 // 子路径文字样式
-                style: const TextStyle(
-                  color: Color(0xFF555555),
+                style: TextStyle(
+                  color: _colors.onSurfaceVariant,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2527,12 +2802,12 @@ class _NoteHomePageState extends State<NoteHomePage> {
       height: 22,
       decoration: BoxDecoration(
         // 选择圆点容器样式
-        color: isSelected ? const Color(0xFFFFC000) : const Color(0xFFF3F3F3),
+        color: isSelected ? _colors.primary : _colors.surfaceContainer,
         shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFFE1E1E1)),
+        border: Border.all(color: _colors.outlineVariant),
       ),
       child: isSelected
-          ? const Icon(Icons.check_rounded, color: Colors.white, size: 20)
+          ? Icon(Icons.check_rounded, color: _colors.onPrimary, size: 20)
           : null,
     );
   }
@@ -2541,11 +2816,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
    * 构建文件夹图标。
    */
   Widget _buildFolderIcon({double size = 58}) {
-    return Icon(
-      Icons.folder_rounded,
-      color: const Color(0xFFFFD43B),
-      size: size,
-    );
+    return Icon(Icons.folder_rounded, color: _colors.secondary, size: size);
   }
 
   /*
@@ -2579,9 +2850,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             foregroundDecoration: BoxDecoration(
               borderRadius: BorderRadius.circular(borderRadius),
               border: Border.all(
-                color: isHoverTarget
-                    ? const Color(0xFFFFC000)
-                    : Colors.transparent,
+                color: isHoverTarget ? _colors.primary : Colors.transparent,
                 width: 3,
               ),
             ),
@@ -2639,24 +2908,24 @@ class _NoteHomePageState extends State<NoteHomePage> {
             decoration: BoxDecoration(
               // 拖动预览四向阴影样式，下方最深、左右一致、上方最浅。
               borderRadius: BorderRadius.circular(18),
-              boxShadow: const <BoxShadow>[
+              boxShadow: <BoxShadow>[
                 BoxShadow(
-                  color: Color(0x26000000),
+                  color: _colors.shadow.withValues(alpha: 0.15),
                   blurRadius: 20,
                   offset: Offset(0, 10),
                 ),
                 BoxShadow(
-                  color: Color(0x18000000),
+                  color: _colors.shadow.withValues(alpha: 0.09),
                   blurRadius: 16,
                   offset: Offset(6, 0),
                 ),
                 BoxShadow(
-                  color: Color(0x18000000),
+                  color: _colors.shadow.withValues(alpha: 0.09),
                   blurRadius: 16,
                   offset: Offset(-6, 0),
                 ),
                 BoxShadow(
-                  color: Color(0x0C000000),
+                  color: _colors.shadow.withValues(alpha: 0.05),
                   blurRadius: 11,
                   offset: Offset(0, -4),
                 ),
@@ -2790,11 +3059,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         // 文件夹卡片容器样式
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const <BoxShadow>[
+          boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Color(0x0F000000),
+              color: _colors.shadow.withValues(
+                alpha: widget.isDarkMode ? 0.28 : 0.06,
+              ),
               blurRadius: 18,
               offset: Offset(0, 8),
             ),
@@ -2818,8 +3089,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         // 文件夹标题样式
-                        style: const TextStyle(
-                          color: Color(0xFF111111),
+                        style: TextStyle(
+                          color: _colors.onSurface,
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
                         ),
@@ -2830,8 +3101,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         // 文件夹数量样式
-                        style: const TextStyle(
-                          color: Color(0xFF888888),
+                        style: TextStyle(
+                          color: _colors.onSurfaceVariant,
                           fontSize: 18,
                         ),
                       ),
@@ -2887,11 +3158,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         // 笔记卡片容器样式
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const <BoxShadow>[
+          boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Color(0x0F000000),
+              color: _colors.shadow.withValues(
+                alpha: widget.isDarkMode ? 0.28 : 0.06,
+              ),
               blurRadius: 18,
               offset: Offset(0, 8),
             ),
@@ -2909,8 +3182,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   // 笔记卡片标题样式
-                  style: const TextStyle(
-                    color: Color(0xFF111111),
+                  style: TextStyle(
+                    color: _colors.onSurface,
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                   ),
@@ -2921,8 +3194,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
                   // 笔记卡片摘要样式
-                  style: const TextStyle(
-                    color: Color(0xFF666666),
+                  style: TextStyle(
+                    color: _colors.onSurfaceVariant,
                     fontSize: 16,
                     height: 1.5,
                   ),
@@ -2931,8 +3204,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 Text(
                   _formatNoteCardDate(note.updatedAt),
                   // 笔记卡片日期样式
-                  style: const TextStyle(
-                    color: Color(0xFF9B9B9B),
+                  style: TextStyle(
+                    color: _colors.onSurfaceVariant.withValues(alpha: 0.75),
                     fontSize: 15,
                   ),
                 ),
@@ -2992,11 +3265,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         // 文件夹列表行容器样式
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const <BoxShadow>[
+          boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Color(0x0A000000),
+              color: _colors.shadow.withValues(
+                alpha: widget.isDarkMode ? 0.24 : 0.04,
+              ),
               blurRadius: 14,
               offset: Offset(0, 6),
             ),
@@ -3020,8 +3295,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         // 文件夹列表标题样式
-                        style: const TextStyle(
-                          color: Color(0xFF111111),
+                        style: TextStyle(
+                          color: _colors.onSurface,
                           fontSize: 19,
                           fontWeight: FontWeight.w800,
                         ),
@@ -3032,8 +3307,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         // 文件夹列表数量样式
-                        style: const TextStyle(
-                          color: Color(0xFF888888),
+                        style: TextStyle(
+                          color: _colors.onSurfaceVariant,
                           fontSize: 15,
                         ),
                       ),
@@ -3089,11 +3364,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         // 笔记列表行容器样式
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors.surfaceContainerLowest,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const <BoxShadow>[
+          boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Color(0x0A000000),
+              color: _colors.shadow.withValues(
+                alpha: widget.isDarkMode ? 0.24 : 0.04,
+              ),
               blurRadius: 14,
               offset: Offset(0, 6),
             ),
@@ -3113,8 +3390,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     // 笔记列表标题样式
-                    style: const TextStyle(
-                      color: Color(0xFF111111),
+                    style: TextStyle(
+                      color: _colors.onSurface,
                       fontSize: 19,
                       fontWeight: FontWeight.w800,
                     ),
@@ -3125,8 +3402,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     // 笔记列表摘要样式
-                    style: const TextStyle(
-                      color: Color(0xFF666666),
+                    style: TextStyle(
+                      color: _colors.onSurfaceVariant,
                       fontSize: 15,
                       height: 1.35,
                     ),
@@ -3135,8 +3412,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   Text(
                     _formatNoteCardDate(note.updatedAt),
                     // 笔记列表日期样式
-                    style: const TextStyle(
-                      color: Color(0xFF9B9B9B),
+                    style: TextStyle(
+                      color: _colors.onSurfaceVariant.withValues(alpha: 0.75),
                       fontSize: 13,
                     ),
                   ),
@@ -3196,11 +3473,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
 
     return Expanded(
       child: gridItems.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 '当前目录还没有内容',
                 // 空目录提示样式
-                style: TextStyle(color: Color(0xFF888888), fontSize: 16),
+                style: TextStyle(color: _colors.onSurfaceVariant, fontSize: 16),
               ),
             )
           : _activeViewMode == NoteViewMode.list
@@ -3281,11 +3558,13 @@ class _NoteHomePageState extends State<NoteHomePage> {
       child: Container(
         // 移动目标卡片容器样式
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors.surfaceContainerLow,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const <BoxShadow>[
+          boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Color(0x0D000000),
+              color: _colors.shadow.withValues(
+                alpha: widget.isDarkMode ? 0.26 : 0.05,
+              ),
               blurRadius: 18,
               offset: Offset(0, 8),
             ),
@@ -3296,15 +3575,15 @@ class _NoteHomePageState extends State<NoteHomePage> {
           // 移动目标卡片内容纵向布局样式
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Icon(icon, color: const Color(0xFFFFC000), size: 48),
+            Icon(icon, color: _colors.primary, size: 48),
             const Spacer(),
             Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               // 移动目标标题样式
-              style: const TextStyle(
-                color: Color(0xFF111111),
+              style: TextStyle(
+                color: _colors.onSurface,
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
               ),
@@ -3316,7 +3595,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 // 移动目标辅助文字样式
-                style: const TextStyle(color: Color(0xFF8C8C8C), fontSize: 14),
+                style: TextStyle(color: _colors.onSurfaceVariant, fontSize: 14),
               ),
             ],
           ],
@@ -3372,9 +3651,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
       builder: (BuildContext context, ScrollController scrollController) {
         return Container(
           // 移动面板容器样式
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
+          decoration: BoxDecoration(
+            color: _colors.surfaceContainerLowest,
+            borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(28),
               topRight: Radius.circular(28),
             ),
@@ -3382,11 +3661,11 @@ class _NoteHomePageState extends State<NoteHomePage> {
           child: Column(
             children: <Widget>[
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 '选择文件夹',
                 // 移动面板标题样式
                 style: TextStyle(
-                  color: Color(0xFF111111),
+                  color: _colors.onSurface,
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
                 ),
@@ -3424,7 +3703,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
       bottom: 0,
       child: Container(
         // 选择模式底部操作栏样式
-        color: Colors.white,
+        color: _colors.surfaceContainerLowest,
         padding: const EdgeInsets.fromLTRB(28, 14, 28, 24),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -3457,12 +3736,12 @@ class _NoteHomePageState extends State<NoteHomePage> {
         // 底部操作项纵向布局样式
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Icon(icon, color: const Color(0xFF111111), size: 30),
+          Icon(icon, color: _colors.onSurface, size: 30),
           const SizedBox(height: 6),
           Text(
             label,
             // 底部操作项文字样式
-            style: const TextStyle(color: Color(0xFF333333), fontSize: 14),
+            style: TextStyle(color: _colors.onSurface, fontSize: 14),
           ),
         ],
       ),
@@ -3474,18 +3753,18 @@ class _NoteHomePageState extends State<NoteHomePage> {
    */
   Widget _buildEditorPanel() {
     if (_activeNote == null) {
-      return const Center(
+      return Center(
         child: Text(
           '还没有笔记',
           // 空编辑区文字样式
-          style: TextStyle(color: Color(0xFF555555), fontSize: 18),
+          style: TextStyle(color: _colors.onSurfaceVariant, fontSize: 18),
         ),
       );
     }
 
     return Container(
       // 编辑面板容器样式
-      color: const Color(0xFFF6F6F6),
+      color: _colors.surfaceContainerLow,
       child: Column(
         children: <Widget>[
           Padding(
@@ -3498,8 +3777,17 @@ class _NoteHomePageState extends State<NoteHomePage> {
                       _isCompactBrowserVisible = true;
                     });
                   },
-                  icon: const Icon(Icons.arrow_back_rounded),
-                  color: const Color(0xFF222222),
+                  icon: SvgPicture.asset(
+                    'assets/icon/left_arrow.svg',
+                    // 返回按钮 SVG 图标尺寸样式
+                    width: 24,
+                    height: 24,
+                    // 返回按钮 SVG 图标主题颜色样式
+                    colorFilter: ColorFilter.mode(
+                      _colors.onSurface,
+                      BlendMode.srcIn,
+                    ),
+                  ),
                 ),
                 Expanded(
                   child: Column(
@@ -3510,8 +3798,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         // 编辑面板标题样式
-                        style: const TextStyle(
-                          color: Color(0xFF111111),
+                        style: TextStyle(
+                          color: _colors.onSurface,
                           fontSize: 24,
                           fontWeight: FontWeight.w700,
                         ),
@@ -3522,8 +3810,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         // 编辑面板辅助信息样式
-                        style: const TextStyle(
-                          color: Color(0xFF8C8C8C),
+                        style: TextStyle(
+                          color: _colors.onSurfaceVariant,
                           fontSize: 12,
                         ),
                       ),
@@ -3536,37 +3824,22 @@ class _NoteHomePageState extends State<NoteHomePage> {
                     _handleDeleteNote(isWideLayout: width >= 980);
                   },
                   icon: const Icon(Icons.delete_outline_rounded),
-                  color: const Color(0xFF222222),
+                  color: _colors.onSurface,
                 ),
               ],
             ),
           ),
-          MarkdownToolbar(onPressedAction: _handleToolbarAction),
+          MarkdownToolbar(
+            controller: _editorController.quillController,
+            onPressedAction: _handleToolbarAction,
+          ),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-              child: TextField(
-                controller: _editorController,
-                focusNode: _editorFocusNode,
-                expands: true,
-                maxLines: null,
-                minLines: null,
-                textAlignVertical: TextAlignVertical.top,
-                keyboardType: TextInputType.multiline,
-                decoration: const InputDecoration(
-                  // 编辑器输入框装饰样式
-                  hintText: '在这里输入 Markdown 笔记内容',
-                  hintStyle: TextStyle(color: Color(0xFFAAAAAA)),
-                  border: InputBorder.none,
-                  isCollapsed: true,
-                ),
-                style: const TextStyle(
-                  // 编辑器输入文字样式
-                  color: Color(0xFF222222),
-                  fontSize: 17,
-                  height: 1.6,
-                ),
-              ),
+            // 编辑器输入框装饰样式
+            // 编辑器输入文字样式
+            child: WysiwygMarkdownEditor(
+              controller: _editorController.quillController,
+              focusNode: _editorFocusNode,
+              scrollController: _editorScrollController,
             ),
           ),
         ],
@@ -3636,7 +3909,7 @@ class _NoteHomePageState extends State<NoteHomePage> {
             flex: 12,
             child: _buildHomePanel(isWideLayout: isWideLayout),
           ),
-          Container(width: 1, color: const Color(0xFFE7E7E7)),
+          Container(width: 1, color: _colors.outlineVariant),
           Expanded(flex: 10, child: _buildEditorPanel()),
         ],
       );
@@ -3664,11 +3937,9 @@ class _NoteHomePageState extends State<NoteHomePage> {
         _handleSystemBack(isWideLayout: isWideLayout);
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF0F1F3),
+        backgroundColor: _colors.surface,
         body: _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFFC000)),
-              )
+            ? Center(child: CircularProgressIndicator(color: _colors.primary))
             : SafeArea(child: _buildBody()),
         floatingActionButton:
             _isSelectionMode || (!isWideLayout && !_isCompactBrowserVisible)
@@ -3678,8 +3949,8 @@ class _NoteHomePageState extends State<NoteHomePage> {
                   final double width = MediaQuery.of(context).size.width;
                   _handleCreateNote(isWideLayout: width >= 980);
                 },
-                backgroundColor: const Color(0xFFFFC000),
-                foregroundColor: Colors.white,
+                backgroundColor: _colors.primary,
+                foregroundColor: _colors.onPrimary,
                 shape: const CircleBorder(),
                 child: const Icon(Icons.add, size: 34),
               ),

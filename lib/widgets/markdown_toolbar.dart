@@ -2,9 +2,10 @@
  * 文件说明：Markdown 工具栏组件文件，提供常用的轻量编辑操作入口。
  *
  * 这个文件只负责“工具栏长什么样”和“点了哪个按钮”。
- * 真正把文字变成标题、加粗、列表的逻辑在 note_home_page.dart 和 markdown_helper.dart 里。
+ * 真正把文字变成标题和列表的逻辑在 note_home_page.dart 和编辑控制器文件里。
  */
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 
 /*
  * 工具栏动作类型。
@@ -13,50 +14,72 @@ import 'package:flutter/material.dart';
  * 这里用它表示工具栏支持哪些操作，避免到处写容易拼错的字符串。
  */
 enum ToolbarActionKey {
-  // 插入一级标题 Markdown 语法。
+  // 设置一级标题格式。
   title,
 
-  // 插入二级标题 Markdown 语法。
+  // 设置二级标题格式。
   subtitle,
 
-  // 给选中文字加粗。
-  bold,
+  // 设置三级标题格式。
+  heading3,
 
-  // 把当前行变成列表项。
+  // 设置四级标题格式。
+  heading4,
+
+  // 设置五级标题格式。
+  heading5,
+
+  // 把当前行变成无序列表项。
   list,
 
-  // 把当前行变成待办项。
-  todo,
-
-  // 把当前行变成引用块。
-  quote,
+  // 把当前行变成有序列表项。
+  orderedList,
 }
 
 /*
  * 工具栏动作数据模型。
  *
- * 这个类把“内部动作 key”和“按钮显示文案”绑在一起。
- * 比如 key 是 ToolbarActionKey.bold，按钮上显示的文字是“加粗”。
+ * 这个类把内部动作 key、辅助文案和对应图标绑在一起。
+ * 比如 key 是 ToolbarActionKey.list，按钮使用无序列表图标并显示对应提示。
  */
 class ToolbarActionItem {
   /*
    * 构造工具栏动作项。
    */
-  const ToolbarActionItem({required this.key, required this.label});
+  const ToolbarActionItem({
+    required this.key,
+    required this.label,
+    this.icon,
+    this.symbol,
+  });
 
   /*
    * 动作唯一标识。
    *
-   * 页面根据这个 key 判断用户点的是标题、加粗还是列表。
+   * 页面根据这个 key 判断用户点的是哪一级标题或哪一种列表。
    */
   final ToolbarActionKey key;
 
   /*
-   * 按钮展示文案。
+   * 按钮辅助文案。
    *
-   * label 是用户能看见的文字。
+   * label 用于图标按钮的悬停提示和无障碍说明。
    */
   final String label;
+
+  /*
+   * Material 图标数据。
+   *
+   * 无序列表和有序列表使用系统熟悉的图标。
+   */
+  final IconData? icon;
+
+  /*
+   * 标题级别符号。
+   *
+   * Material 没有 H1 到 H5 的独立图标，所以使用紧凑字形表达层级。
+   */
+  final String? symbol;
 }
 
 /*
@@ -66,25 +89,61 @@ class ToolbarActionItem {
  * 想增删工具栏按钮时，通常先改这里。
  */
 const List<ToolbarActionItem> toolbarActions = <ToolbarActionItem>[
-  ToolbarActionItem(key: ToolbarActionKey.title, label: '标题'),
-  ToolbarActionItem(key: ToolbarActionKey.subtitle, label: '小标题'),
-  ToolbarActionItem(key: ToolbarActionKey.bold, label: '加粗'),
-  ToolbarActionItem(key: ToolbarActionKey.list, label: '列表'),
-  ToolbarActionItem(key: ToolbarActionKey.todo, label: '待办'),
-  ToolbarActionItem(key: ToolbarActionKey.quote, label: '引用'),
+  ToolbarActionItem(key: ToolbarActionKey.title, label: '一级标题', symbol: 'H1'),
+  ToolbarActionItem(
+    key: ToolbarActionKey.subtitle,
+    label: '二级标题',
+    symbol: 'H2',
+  ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.heading3,
+    label: '三级标题',
+    symbol: 'H3',
+  ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.heading4,
+    label: '四级标题',
+    symbol: 'H4',
+  ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.heading5,
+    label: '五级标题',
+    symbol: 'H5',
+  ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.list,
+    label: '无序列表',
+    icon: Icons.format_list_bulleted_rounded,
+  ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.orderedList,
+    label: '有序列表',
+    icon: Icons.format_list_numbered_rounded,
+  ),
 ];
 
 /*
  * Markdown 工具栏组件。
  *
  * StatelessWidget 表示这个组件自己不保存状态。
- * 它只根据 toolbarActions 和外部传进来的 onPressedAction 生成界面。
+ * 它根据 toolbarActions、编辑器当前格式和外部传进来的 onPressedAction 生成界面。
  */
 class MarkdownToolbar extends StatelessWidget {
   /*
    * 工具栏构造方法。
    */
-  const MarkdownToolbar({super.key, required this.onPressedAction});
+  const MarkdownToolbar({
+    required this.controller,
+    required this.onPressedAction,
+    super.key,
+  });
+
+  /*
+   * 当前所见即所得编辑器控制器。
+   *
+   * 工具栏根据当前光标所在位置读取格式，并展示按钮选中状态。
+   */
+  final QuillController controller;
 
   /*
    * 工具栏按钮点击回调。
@@ -95,59 +154,143 @@ class MarkdownToolbar extends StatelessWidget {
   final ValueChanged<ToolbarActionKey> onPressedAction;
 
   /*
+   * 判断指定工具栏动作在当前选区是否处于启用状态。
+   */
+  bool _isActionActive(ToolbarActionKey actionKey) {
+    final Map<String, Attribute> attributes = controller
+        .getSelectionStyle()
+        .attributes;
+
+    switch (actionKey) {
+      case ToolbarActionKey.title:
+        return attributes[Attribute.header.key] == Attribute.h1;
+      case ToolbarActionKey.subtitle:
+        return attributes[Attribute.header.key] == Attribute.h2;
+      case ToolbarActionKey.heading3:
+        return attributes[Attribute.header.key] == Attribute.h3;
+      case ToolbarActionKey.heading4:
+        return attributes[Attribute.header.key] == Attribute.h4;
+      case ToolbarActionKey.heading5:
+        return attributes[Attribute.header.key] == Attribute.h5;
+      case ToolbarActionKey.list:
+        return attributes[Attribute.list.key] == Attribute.ul;
+      case ToolbarActionKey.orderedList:
+        return attributes[Attribute.list.key] == Attribute.ol;
+    }
+  }
+
+  /*
+   * 构建单个工具栏动作图标。
+   */
+  Widget _buildActionIcon(
+    ToolbarActionItem action,
+    bool isActive,
+    ColorScheme colors,
+  ) {
+    if (action.icon != null) {
+      return Icon(
+        action.icon,
+        // 工具栏动作图标颜色样式
+        color: isActive ? colors.onPrimary : colors.onSurface,
+        size: 21,
+      );
+    }
+
+    return Text(
+      action.symbol ?? '',
+      // 工具栏标题级别图标文字样式
+      style: TextStyle(
+        color: isActive ? colors.onPrimary : colors.onSurface,
+        fontSize: 15,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0,
+      ),
+    );
+  }
+
+  /*
+   * 构建单个工具栏按钮。
+   */
+  Widget _buildToolbarButton(
+    ToolbarActionItem action, {
+    required bool hasRightSpacing,
+    required ColorScheme colors,
+  }) {
+    final bool isActive = _isActionActive(action.key);
+
+    return Padding(
+      // 最后一个按钮不保留尾间距，让工具栏左右边缘严格对称。
+      padding: EdgeInsets.only(right: hasRightSpacing ? 8 : 0),
+      child: Tooltip(
+        message: action.label,
+        child: Material(
+          // 工具栏按钮背景样式
+          color: isActive ? colors.primary : colors.surfaceContainerHigh,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(
+              // 工具栏按钮边框颜色样式
+              color: isActive ? colors.primary : colors.outline,
+            ),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () {
+              if (controller.readOnly) {
+                // 文件切换或移动期间不执行格式操作。
+                return;
+              }
+              // 点击按钮时，把当前按钮代表的动作交给父组件处理。
+              onPressedAction(action.key);
+            },
+            child: SizedBox(
+              width: 40,
+              height: 40,
+              child: Center(child: _buildActionIcon(action, isActive, colors)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
    * 构建工具栏组件。
    *
    * build 返回的 Widget 树就是工具栏最终显示的结构。
    */
   @override
   Widget build(BuildContext context) {
-    return Container(
-      // 工具栏容器装饰样式
-      decoration: const BoxDecoration(
-        color: Color(0xFF1C1C1C),
-        border: Border(bottom: BorderSide(color: Color(0xFF262626))),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: SingleChildScrollView(
-        // 工具栏按钮可能超出屏幕宽度，所以允许横向滚动。
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          // 工具栏按钮横向排列样式
-          // map 会把每一个 ToolbarActionItem 转换成一个按钮 Widget。
-          children: toolbarActions.map((ToolbarActionItem action) {
-            return Padding(
-              // 每个按钮右边留 10 像素，让按钮之间不要贴在一起。
-              padding: const EdgeInsets.only(right: 10),
-              child: OutlinedButton(
-                onPressed: () {
-                  // 点击按钮时，把当前按钮代表的动作交给父组件处理。
-                  onPressedAction(action.key);
-                },
-                style: OutlinedButton.styleFrom(
-                  // 工具栏按钮外观样式
-                  backgroundColor: const Color(0xFF242424),
-                  side: const BorderSide(color: Color(0xFF333333)),
-                  minimumSize: const Size(0, 34),
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: Text(
-                  // 按钮上显示“标题”“加粗”“列表”等文字。
-                  action.label,
-                  // 工具栏按钮文字样式
-                  style: const TextStyle(
-                    color: Color(0xFFE8E8E8),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (BuildContext context, Widget? child) {
+        final ColorScheme colors = Theme.of(context).colorScheme;
+
+        return Container(
+          // 工具栏容器装饰样式
+          decoration: BoxDecoration(
+            // 工具栏与编辑主体使用相同背景色，视觉上保持连续。
+            color: colors.surfaceContainerLow,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: SingleChildScrollView(
+            // 工具栏按钮可能超出屏幕宽度，所以允许横向滚动。
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              // 工具栏按钮横向排列样式
+              // map 会把每一个 ToolbarActionItem 转换成一个按钮 Widget。
+              children: List<Widget>.generate(
+                toolbarActions.length,
+                (int index) => _buildToolbarButton(
+                  toolbarActions[index],
+                  hasRightSpacing: index < toolbarActions.length - 1,
+                  colors: colors,
                 ),
               ),
-            );
-          }).toList(),
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -56,6 +56,8 @@ String stripMarkdownSyntax(String content) {
       .replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '')
       // 去掉待办列表前缀，例如 "- [ ] 事项" 变成 "事项"。
       .replaceAll(RegExp(r'^\s*[-*]\s+\[.\]\s+', multiLine: true), '')
+      // 去掉有序列表前缀，例如 "1. 内容" 变成 "内容"。
+      .replaceAll(RegExp(r'^\s*\d+\.\s+', multiLine: true), '')
       // 去掉普通列表前缀，例如 "- 内容" 变成 "内容"。
       .replaceAll(RegExp(r'^\s*[-*]\s+', multiLine: true), '')
       // 去掉引用符号，例如 "> 引用" 变成 "引用"。

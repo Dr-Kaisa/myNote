@@ -13,7 +13,7 @@ import 'package:path_provider/path_provider.dart';
 /*
  * 应用缓存数据模型。
  *
- * 当前包含首页常用状态：文件夹访问次数、排序方式和视图模式。
+ * 当前包含首页常用状态：文件夹访问次数、排序方式、视图模式和主题模式。
  */
 class AppCacheData {
   /*
@@ -23,6 +23,7 @@ class AppCacheData {
     required this.folderVisitCounts,
     required this.sortMode,
     required this.viewMode,
+    required this.isDarkMode,
   });
 
   /*
@@ -33,6 +34,7 @@ class AppCacheData {
       folderVisitCounts: <String, int>{},
       sortMode: 'updatedAt',
       viewMode: 'grid',
+      isDarkMode: false,
     );
   }
 
@@ -62,6 +64,9 @@ class AppCacheData {
       viewMode: json['viewMode'] is String
           ? json['viewMode'] as String
           : 'grid',
+      isDarkMode: json['isDarkMode'] is bool
+          ? json['isDarkMode'] as bool
+          : false,
     );
   }
 
@@ -81,6 +86,11 @@ class AppCacheData {
   final String viewMode;
 
   /*
+   * 是否启用暗色模式。
+   */
+  final bool isDarkMode;
+
+  /*
    * 转换为 JSON 对象。
    */
   Map<String, dynamic> toJson() {
@@ -88,6 +98,7 @@ class AppCacheData {
       'folderVisitCounts': folderVisitCounts,
       'sortMode': sortMode,
       'viewMode': viewMode,
+      'isDarkMode': isDarkMode,
     };
   }
 }
