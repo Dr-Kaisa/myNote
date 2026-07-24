@@ -213,41 +213,37 @@ class MarkdownToolbar extends StatelessWidget {
    */
   Widget _buildToolbarButton(
     ToolbarActionItem action, {
-    required bool hasRightSpacing,
     required ColorScheme colors,
   }) {
     final bool isActive = _isActionActive(action.key);
 
-    return Padding(
-      // 最后一个按钮不保留尾间距，让工具栏左右边缘严格对称。
-      padding: EdgeInsets.only(right: hasRightSpacing ? 8 : 0),
-      child: Tooltip(
-        message: action.label,
-        child: Material(
-          // 工具栏按钮背景样式
-          color: isActive ? colors.primary : colors.surfaceContainerHigh,
-          shape: RoundedRectangleBorder(
-            side: BorderSide(
-              // 工具栏按钮边框颜色样式
-              color: isActive ? colors.primary : colors.outline,
-            ),
-            borderRadius: BorderRadius.circular(6),
+    return Tooltip(
+      message: action.label,
+      child: Material(
+        // 工具栏按钮背景样式
+        color: isActive ? colors.primary : colors.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(
+            // 工具栏按钮边框颜色样式
+            color: isActive ? colors.primary : colors.outline,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: () {
-              if (controller.readOnly) {
-                // 文件切换或移动期间不执行格式操作。
-                return;
-              }
-              // 点击按钮时，把当前按钮代表的动作交给父组件处理。
-              onPressedAction(action.key);
-            },
-            child: SizedBox(
-              width: 40,
-              height: 40,
-              child: Center(child: _buildActionIcon(action, isActive, colors)),
-            ),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            if (controller.readOnly) {
+              // 文件切换或移动期间不执行格式操作。
+              return;
+            }
+            // 点击按钮时，把当前按钮代表的动作交给父组件处理。
+            onPressedAction(action.key);
+          },
+          child: SizedBox(
+            // 工具栏按钮宽度由外层 Expanded 平分，高度保持固定以防止布局跳动。
+            width: double.infinity,
+            height: 40,
+            child: Center(child: _buildActionIcon(action, isActive, colors)),
           ),
         ),
       ),
@@ -273,21 +269,23 @@ class MarkdownToolbar extends StatelessWidget {
             color: colors.surfaceContainerLow,
           ),
           padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
-          child: SingleChildScrollView(
-            // 工具栏按钮可能超出屏幕宽度，所以允许横向滚动。
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              // 工具栏按钮横向排列样式
-              // map 会把每一个 ToolbarActionItem 转换成一个按钮 Widget。
-              children: List<Widget>.generate(
-                toolbarActions.length,
-                (int index) => _buildToolbarButton(
-                  toolbarActions[index],
-                  hasRightSpacing: index < toolbarActions.length - 1,
-                  colors: colors,
+          child: Row(
+            // 工具栏按钮横向弹性排列样式，每个按钮平分扣除间距后的可用宽度。
+            children: <Widget>[
+              for (
+                int index = 0;
+                index < toolbarActions.length;
+                index++
+              ) ...<Widget>[
+                if (index > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: _buildToolbarButton(
+                    toolbarActions[index],
+                    colors: colors,
+                  ),
                 ),
-              ),
-            ),
+              ],
+            ],
           ),
         );
       },
