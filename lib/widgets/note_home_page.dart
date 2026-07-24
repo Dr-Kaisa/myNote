@@ -3765,69 +3765,67 @@ class _NoteHomePageState extends State<NoteHomePage>
     return Container(
       // 编辑面板容器样式
       color: _colors.surfaceContainerLow,
+      padding: const EdgeInsets.fromLTRB(22, 18, 22, 12),
       child: Column(
         children: <Widget>[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 18, 22, 12),
-            child: Row(
-              children: <Widget>[
-                IconButton(
-                  onPressed: () {
-                    setState(() {
-                      _isCompactBrowserVisible = true;
-                    });
-                  },
-                  icon: SvgPicture.asset(
-                    'assets/icon/left_arrow.svg',
-                    // 返回按钮 SVG 图标尺寸样式
-                    width: 24,
-                    height: 24,
-                    // 返回按钮 SVG 图标主题颜色样式
-                    colorFilter: ColorFilter.mode(
-                      _colors.onSurface,
-                      BlendMode.srcIn,
+          Row(
+            children: <Widget>[
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    _isCompactBrowserVisible = true;
+                  });
+                },
+                icon: SvgPicture.asset(
+                  'assets/icon/left_arrow.svg',
+                  // 返回按钮 SVG 图标尺寸样式
+                  width: 24,
+                  height: 24,
+                  // 返回按钮 SVG 图标主题颜色样式
+                  colorFilter: ColorFilter.mode(
+                    _colors.onSurface,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      _activeNote!.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      // 编辑面板标题样式
+                      style: TextStyle(
+                        color: _colors.onSurface,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        _activeNote!.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        // 编辑面板标题样式
-                        style: TextStyle(
-                          color: _colors.onSurface,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_activeNote!.displayPath} · ${formatNoteTime(_activeNote!.updatedAt)} · $_saveStatusText',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      // 编辑面板辅助信息样式
+                      style: TextStyle(
+                        color: _colors.onSurfaceVariant,
+                        fontSize: 12,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${_activeNote!.displayPath} · ${formatNoteTime(_activeNote!.updatedAt)} · $_saveStatusText',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        // 编辑面板辅助信息样式
-                        style: TextStyle(
-                          color: _colors.onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                IconButton(
-                  onPressed: () {
-                    final double width = MediaQuery.of(context).size.width;
-                    _handleDeleteNote(isWideLayout: width >= 980);
-                  },
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  color: _colors.onSurface,
-                ),
-              ],
-            ),
+              ),
+              IconButton(
+                onPressed: () {
+                  final double width = MediaQuery.of(context).size.width;
+                  _handleDeleteNote(isWideLayout: width >= 980);
+                },
+                icon: const Icon(Icons.delete_outline_rounded),
+                color: _colors.onSurface,
+              ),
+            ],
           ),
           MarkdownToolbar(
             controller: _editorController.quillController,

@@ -272,7 +272,7 @@ class MarkdownToolbar extends StatelessWidget {
             // 工具栏与编辑主体使用相同背景色，视觉上保持连续。
             color: colors.surfaceContainerLow,
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
           child: SingleChildScrollView(
             // 工具栏按钮可能超出屏幕宽度，所以允许横向滚动。
             scrollDirection: Axis.horizontal,

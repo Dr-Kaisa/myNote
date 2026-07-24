@@ -297,7 +297,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         scrollable: true,
         placeholder: '在这里记录今天的想法',
         // 编辑器正文内边距样式
-        padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+        padding: const EdgeInsets.fromLTRB(0, 22, 0, 30),
         // 编辑器标题、列表和正文排版样式
         customStyles: _buildEditorStyles(Theme.of(context).colorScheme),
         // 列表圆点和序号按中文正文的视觉中心进行垂直校正。
