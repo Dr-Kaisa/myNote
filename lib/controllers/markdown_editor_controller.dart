@@ -26,7 +26,11 @@ class MarkdownEditorController extends ChangeNotifier {
         markdownDocument: markdown.Document(
           encodeHtml: false,
           extensionSet: markdown.ExtensionSet.gitHubFlavored,
+          blockSyntaxes: <markdown.BlockSyntax>[const EmbeddableTableSyntax()],
         ),
+        customElementToEmbeddable: <String, ElementToEmbeddableConvertor>{
+          EmbeddableTable.tableType: EmbeddableTable.fromMdSyntax,
+        },
         customElementToBlockAttribute:
             <String, List<Attribute<dynamic>> Function(markdown.Element)>{
               'h4': (_) => <Attribute<dynamic>>[
@@ -41,6 +45,9 @@ class MarkdownEditorController extends ChangeNotifier {
             },
       ),
       _deltaToMarkdown = DeltaToMarkdown(
+        customEmbedHandlers: <String, EmbedToMarkdown>{
+          EmbeddableTable.tableType: EmbeddableTable.toMdSyntax,
+        },
         customContentHandler: DeltaToMarkdown.escapeSpecialCharactersRelaxed,
       ),
       _markdown = initialMarkdown {
@@ -96,6 +103,54 @@ class MarkdownEditorController extends ChangeNotifier {
     quillController.moveCursorToEnd();
     previousDocument.close();
     _listenToDocumentChanges();
+  }
+
+  /*
+   * 在当前选区插入独占一行的 Markdown 表格嵌入。
+   *
+   * 自定义表格嵌入不会由 Quill 自动补齐块级换行，因此这里使用同一次 Delta 事务
+   * 插入必要的前置换行、表格和后置换行，保证段落中间插入后仍可重新载入且一次撤销。
+   */
+  void insertMarkdownTable(String tableMarkdown) {
+    final TextSelection selection = quillController.selection;
+    final String documentText = quillController.document.toPlainText();
+    final int maximumIndex = quillController.document.length - 1;
+    final int insertionIndex = selection.start < 0
+        ? 0
+        : selection.start > maximumIndex
+        ? maximumIndex
+        : selection.start;
+    final int requestedEnd = selection.isValid ? selection.end : insertionIndex;
+    final int selectionEnd = requestedEnd < insertionIndex
+        ? insertionIndex
+        : requestedEnd > maximumIndex
+        ? maximumIndex
+        : requestedEnd;
+    final int replacementLength = selectionEnd - insertionIndex;
+    final bool needsLeadingNewLine =
+        insertionIndex > 0 && documentText[insertionIndex - 1] != '\n';
+    final Delta change = Delta();
+
+    if (insertionIndex > 0) {
+      change.retain(insertionIndex);
+    }
+    if (needsLeadingNewLine) {
+      change.insert('\n');
+    }
+    change
+      ..insert(EmbeddableTable(tableMarkdown).toJson())
+      ..insert('\n');
+    if (replacementLength > 0) {
+      change.delete(replacementLength);
+    }
+
+    quillController.compose(change, selection, ChangeSource.local);
+    quillController.updateSelection(
+      TextSelection.collapsed(
+        offset: insertionIndex + (needsLeadingNewLine ? 1 : 0) + 2,
+      ),
+      ChangeSource.local,
+    );
   }
 
   /*

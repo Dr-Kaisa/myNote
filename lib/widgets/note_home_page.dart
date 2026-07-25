@@ -460,6 +460,18 @@ class _NoteHomePageState extends State<NoteHomePage>
   NoteViewMode _activeViewMode = NoteViewMode.grid;
 
   /*
+   * 当前笔记详情页已经应用的工具栏动作顺序。
+   */
+  List<ToolbarActionKey> _toolbarActionKeys = List<ToolbarActionKey>.from(
+    defaultToolbarActionKeys,
+  );
+
+  /*
+   * 笔记详情页工具仓库是否正在覆盖正文区域。
+   */
+  bool _isToolbarCustomizing = false;
+
+  /*
    * 是否处于数据加载中。
    */
   bool _isLoading = true;
@@ -563,6 +575,9 @@ class _NoteHomePageState extends State<NoteHomePage>
           ..addAll(appCache.folderVisitCounts);
         _activeSortMode = _getSortModeFromCache(appCache.sortMode);
         _activeViewMode = _getViewModeFromCache(appCache.viewMode);
+        _toolbarActionKeys = toolbarActionKeysFromNames(
+          appCache.toolbarActionKeys,
+        );
         _categoryFolderPaths = _buildCategoryFolderPaths(folderPaths);
         _activeNote = notes.isNotEmpty ? notes.first : null;
         _activeDirectoryPath = '';
@@ -1027,12 +1042,13 @@ class _NoteHomePageState extends State<NoteHomePage>
    */
   Future<void> _saveAppCache() async {
     try {
-      await _appCacheService.saveCache(
-        AppCacheData(
+      await _appCacheService.updateCache(
+        (AppCacheData appCache) => AppCacheData(
           folderVisitCounts: Map<String, int>.from(_folderVisitCounts),
           sortMode: _activeSortMode.name,
           viewMode: _activeViewMode.name,
-          isDarkMode: widget.isDarkMode,
+          isDarkMode: appCache.isDarkMode,
+          toolbarActionKeys: toolbarActionKeyNames(_toolbarActionKeys),
         ),
       );
     } catch (error) {
@@ -2444,14 +2460,77 @@ class _NoteHomePageState extends State<NoteHomePage>
       return;
     }
 
+    if (actionKey == ToolbarActionKey.undo) {
+      _editorController.quillController.undo();
+      _editorFocusNode.requestFocus();
+      return;
+    }
+
+    if (actionKey == ToolbarActionKey.redo) {
+      _editorController.quillController.redo();
+      _editorFocusNode.requestFocus();
+      return;
+    }
+
+    if (actionKey == ToolbarActionKey.insertTable) {
+      _insertMarkdownTable();
+      return;
+    }
+
     _toggleEditorAttribute(switch (actionKey) {
       ToolbarActionKey.title => Attribute.h1,
       ToolbarActionKey.subtitle => Attribute.h2,
       ToolbarActionKey.heading3 => Attribute.h3,
       ToolbarActionKey.heading4 => Attribute.h4,
       ToolbarActionKey.heading5 => Attribute.h5,
+      ToolbarActionKey.heading6 => Attribute.h6,
+      ToolbarActionKey.bold => Attribute.bold,
+      ToolbarActionKey.italic => Attribute.italic,
+      ToolbarActionKey.strikeThrough => Attribute.strikeThrough,
       ToolbarActionKey.list => Attribute.ul,
       ToolbarActionKey.orderedList => Attribute.ol,
+      ToolbarActionKey.checkList => Attribute.unchecked,
+      ToolbarActionKey.blockQuote => Attribute.blockQuote,
+      ToolbarActionKey.codeBlock => Attribute.codeBlock,
+      ToolbarActionKey.inlineCode => Attribute.inlineCode,
+      ToolbarActionKey.insertTable ||
+      ToolbarActionKey.undo ||
+      ToolbarActionKey.redo => throw StateError('命令工具已在格式切换前处理'),
+    });
+  }
+
+  /*
+   * 在当前选区插入一个可保存为 Markdown 的两列表格。
+   */
+  void _insertMarkdownTable() {
+    _editorController.insertMarkdownTable(
+      '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |',
+    );
+    _editorFocusNode.requestFocus();
+  }
+
+  /*
+   * 接收工具栏新的动作顺序并立即保存到应用缓存。
+   */
+  void _handleToolbarActionKeysChanged(
+    List<ToolbarActionKey> toolbarActionKeys,
+  ) {
+    setState(() {
+      _toolbarActionKeys = List<ToolbarActionKey>.from(toolbarActionKeys);
+    });
+    unawaited(_saveAppCache());
+  }
+
+  /*
+   * 同步工具仓库显示状态，仓库打开时隐藏下方笔记正文。
+   */
+  void _handleToolbarCustomizationChanged(bool isCustomizing) {
+    if (_isToolbarCustomizing == isCustomizing) {
+      return;
+    }
+
+    setState(() {
+      _isToolbarCustomizing = isCustomizing;
     });
   }
 
@@ -3830,15 +3909,23 @@ class _NoteHomePageState extends State<NoteHomePage>
           MarkdownToolbar(
             controller: _editorController.quillController,
             onPressedAction: _handleToolbarAction,
+            initialActionKeys: _toolbarActionKeys,
+            onActionKeysChanged: _handleToolbarActionKeysChanged,
+            onCustomizationChanged: _handleToolbarCustomizationChanged,
           ),
           Expanded(
             // 编辑器输入框装饰样式
             // 编辑器输入文字样式
-            child: WysiwygMarkdownEditor(
-              controller: _editorController.quillController,
-              focusNode: _editorFocusNode,
-              scrollController: _editorScrollController,
-            ),
+            child: _isToolbarCustomizing
+                ? ColoredBox(
+                    // 工具仓库显示期间正文区域背景样式
+                    color: _colors.surfaceContainerLow,
+                  )
+                : WysiwygMarkdownEditor(
+                    controller: _editorController.quillController,
+                    focusNode: _editorFocusNode,
+                    scrollController: _editorScrollController,
+                  ),
           ),
         ],
       ),

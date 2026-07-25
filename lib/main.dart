@@ -97,13 +97,13 @@ class _MyNoteAppState extends State<MyNoteApp> {
    */
   Future<void> _saveThemeMode(bool isDarkMode) async {
     try {
-      final AppCacheData appCache = await _appCacheService.loadCache();
-      await _appCacheService.saveCache(
-        AppCacheData(
+      await _appCacheService.updateCache(
+        (AppCacheData appCache) => AppCacheData(
           folderVisitCounts: appCache.folderVisitCounts,
           sortMode: appCache.sortMode,
           viewMode: appCache.viewMode,
           isDarkMode: isDarkMode,
+          toolbarActionKeys: appCache.toolbarActionKeys,
         ),
       );
     } catch (error) {

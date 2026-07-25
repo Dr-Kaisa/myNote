@@ -5,6 +5,231 @@
  */
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
+import 'package:markdown/markdown.dart' as markdown;
+import 'package:markdown_quill/markdown_quill.dart';
+
+/*
+ * Markdown 表格嵌入内容渲染组件。
+ *
+ * 表格内容通过 Markdown AST 读取，编辑器中以只读网格展示，列数较多时可以横向滚动。
+ */
+class _MarkdownTableEmbedBuilder extends EmbedBuilder {
+  /*
+   * 构造 Markdown 表格嵌入内容渲染组件。
+   */
+  const _MarkdownTableEmbedBuilder();
+
+  /*
+   * 表格嵌入内容标识。
+   */
+  @override
+  String get key => EmbeddableTable.tableType;
+
+  /*
+   * 使用 GitHub Flavored Markdown 规则解析表格根节点。
+   */
+  markdown.Element? _parseTable(String markdownText) {
+    try {
+      for (final markdown.Node node in markdown.Document(
+        encodeHtml: false,
+        extensionSet: markdown.ExtensionSet.gitHubFlavored,
+      ).parse(markdownText)) {
+        if (node is markdown.Element && node.tag == 'table') {
+          return node;
+        }
+      }
+    } catch (_) {
+      // 表格数据异常时交给基础回退组件展示原始内容，避免编辑器无法打开。
+    }
+
+    return null;
+  }
+
+  /*
+   * 从 Markdown 表格 AST 中收集表头和表体行。
+   */
+  List<List<markdown.Element>> _readRows(markdown.Element table) {
+    final List<List<markdown.Element>> rows = <List<markdown.Element>>[];
+
+    for (final markdown.Node sectionNode
+        in table.children ?? const <markdown.Node>[]) {
+      if (sectionNode is! markdown.Element) {
+        continue;
+      }
+
+      for (final markdown.Node rowNode
+          in sectionNode.children ?? const <markdown.Node>[]) {
+        if (rowNode is! markdown.Element || rowNode.tag != 'tr') {
+          continue;
+        }
+
+        rows.add(
+          (rowNode.children ?? const <markdown.Node>[])
+              .whereType<markdown.Element>()
+              .where(
+                (markdown.Element cell) => cell.tag == 'th' || cell.tag == 'td',
+              )
+              .toList(growable: false),
+        );
+      }
+    }
+
+    return rows;
+  }
+
+  /*
+   * 根据 Markdown 单元格对齐属性换算文字对齐方式。
+   */
+  TextAlign _readTextAlign(markdown.Element? cell) {
+    return switch (cell?.attributes['align']) {
+      'center' => TextAlign.center,
+      'right' => TextAlign.right,
+      _ => TextAlign.left,
+    };
+  }
+
+  /*
+   * 构建一个只读表格单元格。
+   */
+  Widget _buildCell({
+    required markdown.Element? cell,
+    required double width,
+    required bool isLastColumn,
+    required bool isLastRow,
+    required ColorScheme colors,
+  }) {
+    final bool isHeader = cell?.tag == 'th';
+
+    return Container(
+      // 表格单元格宽度与最小高度样式
+      width: width,
+      constraints: const BoxConstraints(minHeight: 44),
+      // 表格单元格内边距样式
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      // 表格单元格背景与分隔线样式
+      decoration: BoxDecoration(
+        color: isHeader ? colors.surfaceContainer : colors.surface,
+        border: Border(
+          right: isLastColumn
+              ? BorderSide.none
+              : BorderSide(color: colors.outlineVariant),
+          bottom: isLastRow
+              ? BorderSide.none
+              : BorderSide(color: colors.outlineVariant),
+        ),
+      ),
+      child: Text(
+        cell?.textContent ?? '',
+        textAlign: _readTextAlign(cell),
+        // 表格单元格文字样式
+        style: TextStyle(
+          color: colors.onSurface,
+          fontSize: 14,
+          fontWeight: isHeader ? FontWeight.w700 : FontWeight.w400,
+          height: 1.4,
+          letterSpacing: 0,
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建一行等高的表格单元格。
+   */
+  Widget _buildRow({
+    required List<markdown.Element> cells,
+    required int columnCount,
+    required double cellWidth,
+    required bool isLastRow,
+    required ColorScheme colors,
+  }) {
+    return IntrinsicHeight(
+      child: Row(
+        // 表格行交叉轴拉伸样式
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: List<Widget>.generate(
+          columnCount,
+          (int columnIndex) => _buildCell(
+            cell: columnIndex < cells.length ? cells[columnIndex] : null,
+            width: cellWidth,
+            isLastColumn: columnIndex == columnCount - 1,
+            isLastRow: isLastRow,
+            colors: colors,
+          ),
+          growable: false,
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建只读 Markdown 表格网格。
+   */
+  @override
+  Widget build(BuildContext context, EmbedContext embedContext) {
+    final markdown.Element? table = _parseTable(
+      embedContext.node.value.data.toString(),
+    );
+    if (table == null) {
+      return const _MarkdownEmbedFallbackBuilder().build(context, embedContext);
+    }
+
+    final List<List<markdown.Element>> rows = _readRows(table);
+    final int columnCount = rows.fold<int>(
+      0,
+      (int count, List<markdown.Element> row) =>
+          row.length > count ? row.length : count,
+    );
+    if (columnCount == 0) {
+      return const _MarkdownEmbedFallbackBuilder().build(context, embedContext);
+    }
+
+    return Padding(
+      // Markdown 表格垂直间距样式
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double availableWidth = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : columnCount * 112;
+          final double dividedWidth = availableWidth / columnCount;
+          final double cellWidth = dividedWidth < 112 ? 112 : dividedWidth;
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Container(
+              // Markdown 表格整体宽度样式
+              width: cellWidth * columnCount,
+              // Markdown 表格外框与圆角样式
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                // Markdown 表格纵向布局样式
+                mainAxisSize: MainAxisSize.min,
+                children: List<Widget>.generate(
+                  rows.length,
+                  (int rowIndex) => _buildRow(
+                    cells: rows[rowIndex],
+                    columnCount: columnCount,
+                    cellWidth: cellWidth,
+                    isLastRow: rowIndex == rows.length - 1,
+                    colors: Theme.of(context).colorScheme,
+                  ),
+                  growable: false,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
 
 /*
  * 暂未提供专用渲染器的 Markdown 嵌入内容回退组件。
@@ -304,6 +529,8 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         // Quill 暂时把自定义列表前导接口标记为实验接口，此处仅做局部使用。
         // ignore: experimental_member_use
         customLeadingBlockBuilder: _buildAlignedListLeading,
+        // Markdown 表格使用只读网格组件展示。
+        embedBuilders: const <EmbedBuilder>[_MarkdownTableEmbedBuilder()],
         // 未配置专用组件的旧 Markdown 内容使用安全回退展示。
         unknownEmbedBuilder: const _MarkdownEmbedFallbackBuilder(),
       ),

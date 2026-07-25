@@ -24,6 +24,7 @@ class AppCacheData {
     required this.sortMode,
     required this.viewMode,
     required this.isDarkMode,
+    this.toolbarActionKeys,
   });
 
   /*
@@ -35,6 +36,7 @@ class AppCacheData {
       sortMode: 'updatedAt',
       viewMode: 'grid',
       isDarkMode: false,
+      toolbarActionKeys: null,
     );
   }
 
@@ -43,6 +45,7 @@ class AppCacheData {
    */
   factory AppCacheData.fromJson(Map<String, dynamic> json) {
     final Object? rawFolderVisitCounts = json['folderVisitCounts'];
+    final Object? rawToolbarActionKeys = json['toolbarActionKeys'];
     final Map<String, int> folderVisitCounts = <String, int>{};
 
     if (rawFolderVisitCounts is Map) {
@@ -67,6 +70,9 @@ class AppCacheData {
       isDarkMode: json['isDarkMode'] is bool
           ? json['isDarkMode'] as bool
           : false,
+      toolbarActionKeys: rawToolbarActionKeys is List
+          ? rawToolbarActionKeys.whereType<String>().toList()
+          : null,
     );
   }
 
@@ -91,6 +97,11 @@ class AppCacheData {
   final bool isDarkMode;
 
   /*
+   * 笔记详情页工具栏操作顺序，空列表表示工具栏不显示任何操作。
+   */
+  final List<String>? toolbarActionKeys;
+
+  /*
    * 转换为 JSON 对象。
    */
   Map<String, dynamic> toJson() {
@@ -99,6 +110,7 @@ class AppCacheData {
       'sortMode': sortMode,
       'viewMode': viewMode,
       'isDarkMode': isDarkMode,
+      'toolbarActionKeys': toolbarActionKeys,
     };
   }
 }
@@ -113,6 +125,11 @@ class AppCacheService {
    * 缓存文件名。
    */
   static const String cacheFileName = 'my_note_app_cache.json';
+
+  /*
+   * 全部服务实例共用的缓存更新队列，避免不同页面同时读改写时覆盖新字段。
+   */
+  static Future<void> _updateQueue = Future<void>.value();
 
   /*
    * 获取缓存文件对象。
@@ -147,6 +164,25 @@ class AppCacheService {
     } catch (error) {
       return AppCacheData.defaults();
     }
+  }
+
+  /*
+   * 串行读取并更新应用缓存。
+   *
+   * updater 只修改调用方负责的字段，队列中的后一个任务会读取前一个任务写入的最新内容。
+   */
+  Future<void> updateCache(
+    AppCacheData Function(AppCacheData cacheData) updater,
+  ) {
+    final Future<void> updateTask = _updateQueue.then((_) async {
+      final AppCacheData cacheData = await loadCache();
+      await saveCache(updater(cacheData));
+    });
+    _updateQueue = updateTask.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
+    return updateTask;
   }
 
   /*
