@@ -390,6 +390,64 @@ void main() {
   });
 
   /*
+   * 验证切走编辑页导致失焦后，会清除 H5 工具的常亮视觉状态。
+   */
+  testWidgets('编辑器失焦会清除标题工具常亮状态', (WidgetTester tester) async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '##### 五级标题\n',
+    );
+    final FocusNode focusNode = FocusNode();
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 1),
+      ChangeSource.local,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: Focus(
+            focusNode: focusNode,
+            child: MarkdownToolbar(
+              controller: controller.quillController,
+              focusNode: focusNode,
+              initialActionKeys: const <ToolbarActionKey>[
+                ToolbarActionKey.heading5,
+              ],
+              onPressedAction: (ToolbarActionKey actionKey) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    focusNode.requestFocus();
+    await tester.pump();
+    final Finder heading5Action = find.byKey(
+      const ValueKey<String>('toolbar-active-heading5'),
+    );
+    expect(
+      tester.widget<Material>(heading5Action).color,
+      AppTheme.lightTheme.colorScheme.primary,
+    );
+
+    focusNode.unfocus();
+    await tester.pump();
+
+    expect(
+      tester.widget<Material>(heading5Action).color,
+      AppTheme.lightTheme.colorScheme.surfaceContainerHigh,
+    );
+    expect(controller.markdownText, '##### 五级标题\n');
+    expect(
+      controller.quillController.getSelectionStyle().attributes,
+      containsPair(Attribute.header.key, Attribute.h5),
+    );
+  });
+
+  /*
    * 验证 H6 和加粗工具作为已应用工具时可以回传对应动作。
    */
   testWidgets('新增格式工具可以回传 H6 和加粗动作', (WidgetTester tester) async {
@@ -430,6 +488,8 @@ void main() {
    */
   testWidgets('长按工具会进入自定义模式并展开仓库', (WidgetTester tester) async {
     final MarkdownEditorController controller = MarkdownEditorController();
+    final MarkdownToolbarCustomizationController customizationController =
+        MarkdownToolbarCustomizationController();
     addTearDown(controller.dispose);
     bool isCustomizing = false;
     tester.view.physicalSize = const Size(320, 360);
@@ -447,6 +507,7 @@ void main() {
                 children: <Widget>[
                   MarkdownToolbar(
                     controller: controller.quillController,
+                    customizationController: customizationController,
                     onPressedAction: (ToolbarActionKey actionKey) {},
                     onCustomizationChanged: (bool value) {
                       // 同步仓库浮层状态并切换测试正文可见性。
@@ -482,7 +543,11 @@ void main() {
 
     // 长按成立后原工具继续留在原位置，只有后续移动才会带动浮层预览。
     expect(
-      tester.getSize(find.byKey(const ValueKey<String>('toolbar-gap-0'))).width,
+      tester
+          .getSize(
+            find.byKey(const ValueKey<String>('toolbar-gap-indicator-0')),
+          )
+          .width,
       10,
     );
     expect(tester.getCenter(pressedAction), originalCenter);
@@ -529,6 +594,7 @@ void main() {
       greaterThan(firstRowTop),
     );
     expect(tester.getSize(firstRepositoryAction).height, 42);
+    expect(tester.getSize(firstRepositoryAction).width, 42);
     expect(tester.getSize(pressedAction).height, 36);
 
     final Finder repositoryPressedAction = find.byKey(
@@ -589,6 +655,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     await tester.tap(pressedAction);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(isCustomizing, isTrue);
+    expect(
+      find.byKey(const ValueKey<String>('toolbar-repository')),
+      findsOneWidget,
+    );
+
+    customizationController.closeCustomization();
     await tester.pump(const Duration(milliseconds: 300));
     expect(isCustomizing, isFalse);
     expect(find.text('笔记正文内容'), findsOneWidget);
@@ -710,9 +784,9 @@ void main() {
   });
 
   /*
-   * 验证上栏只有一个工具时，仓库工具可以直接拖动并展开边缘插槽。
+   * 验证上栏只有一个工具时，最左和最右边缘都可以吸附仓库工具。
    */
-  testWidgets('单工具栏可以直接拖入仓库工具', (WidgetTester tester) async {
+  testWidgets('单工具栏左右边缘可以吸附仓库工具', (WidgetTester tester) async {
     final MarkdownEditorController controller = MarkdownEditorController();
     addTearDown(controller.dispose);
     List<ToolbarActionKey>? changedActionKeys;
@@ -753,8 +827,12 @@ void main() {
       ),
     );
     await tester.pump();
-    final Rect titleRect = tester.getRect(titleAction);
-    await gesture.moveTo(Offset(titleRect.left + 2, titleRect.center.dy));
+    final Rect toolbarEdgeRect = tester.getRect(
+      find.byKey(const ValueKey<String>('toolbar-edge-drop-target')),
+    );
+    await gesture.moveTo(
+      Offset(toolbarEdgeRect.left + 1, toolbarEdgeRect.top + 1),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
 
@@ -804,6 +882,21 @@ void main() {
     expect(changedActionKeys, <ToolbarActionKey>[
       ToolbarActionKey.bold,
       ToolbarActionKey.title,
+    ]);
+
+    await dragToolbarAction(
+      tester,
+      source: find.byKey(const ValueKey<String>('toolbar-repository-italic')),
+      targetPosition: Offset(
+        toolbarEdgeRect.right - 1,
+        toolbarEdgeRect.top + 1,
+      ),
+    );
+
+    expect(changedActionKeys, <ToolbarActionKey>[
+      ToolbarActionKey.bold,
+      ToolbarActionKey.title,
+      ToolbarActionKey.italic,
     ]);
   });
 

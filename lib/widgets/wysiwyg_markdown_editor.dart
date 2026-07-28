@@ -314,6 +314,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
     required this.controller,
     required this.focusNode,
     required this.scrollController,
+    this.metadataText,
     super.key,
   });
 
@@ -331,6 +332,11 @@ class WysiwygMarkdownEditor extends StatelessWidget {
    * 编辑器滚动控制器。
    */
   final ScrollController scrollController;
+
+  /*
+   * 正文顶部随内容滚动的元信息文案。
+   */
+  final String? metadataText;
 
   /*
    * 创建标题或正文的块级文字样式。
@@ -509,10 +515,9 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   }
 
   /*
-   * 构建所见即所得正文编辑区域。
+   * 按指定顶部间距构建 Quill 正文编辑区域。
    */
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildQuillEditor(BuildContext context, double topPadding) {
     return QuillEditor(
       controller: controller,
       focusNode: focusNode,
@@ -522,7 +527,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         scrollable: true,
         placeholder: '在这里记录今天的想法',
         // 编辑器正文内边距样式
-        padding: const EdgeInsets.fromLTRB(0, 22, 0, 30),
+        padding: EdgeInsets.fromLTRB(0, topPadding, 0, 30),
         // 编辑器标题、列表和正文排版样式
         customStyles: _buildEditorStyles(Theme.of(context).colorScheme),
         // 列表圆点和序号按中文正文的视觉中心进行垂直校正。
@@ -534,6 +539,60 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         // 未配置专用组件的旧 Markdown 内容使用安全回退展示。
         unknownEmbedBuilder: const _MarkdownEmbedFallbackBuilder(),
       ),
+    );
+  }
+
+  /*
+   * 构建所见即所得正文编辑区域。
+   */
+  @override
+  Widget build(BuildContext context) {
+    if (metadataText == null) {
+      return _buildQuillEditor(context, 6);
+    }
+
+    return Stack(
+      // 编辑器与滚动元信息使用同一可用区域样式
+      fit: StackFit.expand,
+      children: <Widget>[
+        _buildQuillEditor(context, 66),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: AnimatedBuilder(
+            animation: scrollController,
+            child: IgnorePointer(
+              child: Padding(
+                // 正文元信息顶部间距样式
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(
+                  metadataText!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  // 正文元信息文字样式
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 13,
+                    height: 1.4,
+                    letterSpacing: 0,
+                  ),
+                ),
+              ),
+            ),
+            builder: (BuildContext context, Widget? child) {
+              // 元信息与正文使用相同滚动偏移，因此离开顶部时不会固定停留。
+              return Transform.translate(
+                offset: Offset(
+                  0,
+                  scrollController.hasClients ? -scrollController.offset : 0,
+                ),
+                child: child,
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

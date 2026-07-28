@@ -303,7 +303,11 @@ class _ToolbarDragData {
   /*
    * 构造工具栏拖动数据。
    */
-  const _ToolbarDragData({required this.actionKey, required this.source});
+  const _ToolbarDragData({
+    required this.actionKey,
+    required this.source,
+    required this.feedbackSize,
+  });
 
   /*
    * 当前拖动的工具标识。
@@ -314,6 +318,44 @@ class _ToolbarDragData {
    * 当前工具的拖动来源。
    */
   final _ToolbarActionSource source;
+
+  /*
+   * 本次拖动反馈实际使用的尺寸。
+   */
+  final Size feedbackSize;
+}
+
+/*
+ * 工具栏自定义模式控制器，供详情页返回键关闭工具仓库。
+ */
+class MarkdownToolbarCustomizationController {
+  /*
+   * 当前工具栏注册的关闭回调。
+   */
+  VoidCallback? _closeCustomization;
+
+  /*
+   * 关闭当前工具栏的自定义模式。
+   */
+  void closeCustomization() {
+    _closeCustomization?.call();
+  }
+
+  /*
+   * 绑定当前工具栏的关闭回调。
+   */
+  void _attach(VoidCallback closeCustomization) {
+    _closeCustomization = closeCustomization;
+  }
+
+  /*
+   * 解除当前工具栏的关闭回调。
+   */
+  void _detach(VoidCallback closeCustomization) {
+    if (_closeCustomization == closeCustomization) {
+      _closeCustomization = null;
+    }
+  }
 }
 
 /*
@@ -328,6 +370,8 @@ class MarkdownToolbar extends StatefulWidget {
   const MarkdownToolbar({
     required this.controller,
     required this.onPressedAction,
+    this.focusNode,
+    this.customizationController,
     this.initialActionKeys = defaultToolbarActionKeys,
     this.onActionKeysChanged,
     this.onCustomizationChanged,
@@ -348,6 +392,16 @@ class MarkdownToolbar extends StatefulWidget {
    * 当用户点击按钮时，把对应的 ToolbarActionKey 传回父组件。
    */
   final ValueChanged<ToolbarActionKey> onPressedAction;
+
+  /*
+   * 当前编辑器焦点，用于在切走页面后清除格式常亮状态。
+   */
+  final FocusNode? focusNode;
+
+  /*
+   * 供详情页返回键关闭工具栏自定义模式的控制器。
+   */
+  final MarkdownToolbarCustomizationController? customizationController;
 
   /*
    * 首次创建组件时需要展示的工具顺序。
@@ -435,6 +489,11 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
   final GlobalKey _emptyToolbarActionKey = GlobalKey();
 
   /*
+   * 上栏整行边缘定位标识，用于扩大最左和最右吸附范围。
+   */
+  final GlobalKey _toolbarEdgeDropKey = GlobalKey();
+
+  /*
    * 已应用图标抖动动画控制器。
    */
   late final AnimationController _shakeController;
@@ -484,6 +543,8 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
     _repositoryActionOrder = toolbarActions
         .map((ToolbarActionItem action) => action.key)
         .toList(growable: true);
+    widget.focusNode?.addListener(_handleEditorFocusChanged);
+    widget.customizationController?._attach(_leaveCustomizationMode);
     _shakeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 150),
@@ -496,6 +557,14 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
   @override
   void didUpdateWidget(covariant MarkdownToolbar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode?.removeListener(_handleEditorFocusChanged);
+      widget.focusNode?.addListener(_handleEditorFocusChanged);
+    }
+    if (oldWidget.customizationController != widget.customizationController) {
+      oldWidget.customizationController?._detach(_leaveCustomizationMode);
+      widget.customizationController?._attach(_leaveCustomizationMode);
+    }
     final List<ToolbarActionKey> nextActionKeys = _normalizeActionKeys(
       widget.initialActionKeys,
     );
@@ -510,12 +579,25 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
    */
   @override
   void dispose() {
+    widget.focusNode?.removeListener(_handleEditorFocusChanged);
+    widget.customizationController?._detach(_leaveCustomizationMode);
     _shakeController.dispose();
     for (final OverlayEntry entry in _flyingActionEntries) {
       entry.remove();
     }
     _flyingActionEntries.clear();
     super.dispose();
+  }
+
+  /*
+   * 编辑器焦点变化时刷新工具栏格式常亮状态。
+   */
+  void _handleEditorFocusChanged() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {});
   }
 
   /*
@@ -701,15 +783,21 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
   /*
    * 将拖动反馈左上角坐标转换为实际用于落点判断的反馈中心坐标。
    */
-  Offset _getDragFeedbackCenter(Offset feedbackTopLeft) {
-    return feedbackTopLeft + _getAppliedActionSize().center(Offset.zero);
+  Offset _getDragFeedbackCenter(
+    _ToolbarDragData dragData,
+    Offset feedbackTopLeft,
+  ) {
+    return feedbackTopLeft + dragData.feedbackSize.center(Offset.zero);
   }
 
   /*
    * 根据拖动反馈左上角坐标获取其全局矩形。
    */
-  Rect _getDragFeedbackGlobalRect(Offset feedbackTopLeft) {
-    return feedbackTopLeft & _getAppliedActionSize();
+  Rect _getDragFeedbackGlobalRect(
+    _ToolbarDragData dragData,
+    Offset feedbackTopLeft,
+  ) {
+    return feedbackTopLeft & dragData.feedbackSize;
   }
 
   /*
@@ -1196,6 +1284,10 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
    * 判断指定工具栏动作在当前选区是否处于启用状态。
    */
   bool _isActionActive(ToolbarActionKey actionKey) {
+    if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+      return false;
+    }
+
     final Map<String, Attribute> attributes = widget.controller
         .getSelectionStyle()
         .attributes;
@@ -1278,7 +1370,6 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
    */
   void _handleActionPressed(ToolbarActionKey actionKey) {
     if (_isCustomizing) {
-      _leaveCustomizationMode();
       return;
     }
 
@@ -1549,6 +1640,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
         dragData: _ToolbarDragData(
           actionKey: actionKey,
           source: _ToolbarActionSource.applied,
+          feedbackSize: _getAppliedActionSize(),
         ),
         action: action,
         colors: colors,
@@ -1576,7 +1668,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
         final int? insertionIndex = _getToolbarInsertionIndexForPosition(
           actionKey,
           index,
-          _getDragFeedbackCenter(details.offset),
+          _getDragFeedbackCenter(details.data, details.offset),
         );
         if (insertionIndex == null) {
           return;
@@ -1593,21 +1685,27 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
         final int? insertionIndex = _getToolbarInsertionIndexForPosition(
           actionKey,
           index,
-          _getDragFeedbackCenter(details.offset),
+          _getDragFeedbackCenter(details.data, details.offset),
         );
         _clearToolbarDropHover();
         if (insertionIndex == null) {
           _replaceDraggedAction(
             details.data,
             actionKey,
-            landingStartGlobalRect: _getDragFeedbackGlobalRect(details.offset),
+            landingStartGlobalRect: _getDragFeedbackGlobalRect(
+              details.data,
+              details.offset,
+            ),
           );
           return;
         }
         _insertDraggedAction(
           details.data,
           insertionIndex,
-          landingStartGlobalRect: _getDragFeedbackGlobalRect(details.offset),
+          landingStartGlobalRect: _getDragFeedbackGlobalRect(
+            details.data,
+            details.offset,
+          ),
         );
       },
       builder:
@@ -1665,12 +1763,39 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
   }
 
   /*
+   * 根据整条工具栏左右边缘判断首位或末位插入位置。
+   */
+  int? _getToolbarEdgeInsertionIndex(
+    _ToolbarDragData dragData,
+    Offset globalPosition,
+  ) {
+    final Rect? toolbarRect = _getGlobalRect(_toolbarEdgeDropKey);
+    if (toolbarRect == null) {
+      return null;
+    }
+
+    final double edgeWidth = toolbarRect.width < 96
+        ? toolbarRect.width / 2
+        : 48;
+    if (globalPosition.dx <= toolbarRect.left + edgeWidth &&
+        _canInsertDraggedActionAt(dragData, 0)) {
+      return 0;
+    }
+    if (globalPosition.dx >= toolbarRect.right - edgeWidth &&
+        _canInsertDraggedActionAt(dragData, _appliedActionKeys.length)) {
+      return _appliedActionKeys.length;
+    }
+    return null;
+  }
+
+  /*
    * 构建两个已应用工具之间的插入目标。
    */
   Widget _buildInsertionTarget(
     int insertionIndex,
     ColorScheme colors, {
     bool fillsRemainingSpace = false,
+    Alignment indicatorAlignment = Alignment.centerLeft,
   }) {
     return DragTarget<_ToolbarDragData>(
       key: ValueKey<String>('toolbar-gap-$insertionIndex'),
@@ -1696,7 +1821,10 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
         _insertDraggedAction(
           details.data,
           insertionIndex,
-          landingStartGlobalRect: _getDragFeedbackGlobalRect(details.offset),
+          landingStartGlobalRect: _getDragFeedbackGlobalRect(
+            details.data,
+            details.offset,
+          ),
         );
       },
       builder:
@@ -1756,8 +1884,8 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
             }
 
             return Align(
-              // 剩余空间插入提示靠左布局样式，整块空白区域都可接收拖动。
-              alignment: Alignment.centerLeft,
+              // 弹性插入区域提示对齐样式，整块空白区域都可接收拖动。
+              alignment: indicatorAlignment,
               child: insertionIndicator,
             );
           },
@@ -1779,6 +1907,70 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
           // 空工具栏入口图标颜色样式
           color: colors.onSurfaceVariant,
         ),
+      ),
+    );
+  }
+
+  /*
+   * 构建覆盖整行的左右边缘兜底拖放目标。
+   */
+  Widget _buildToolbarEdgeDropTarget(ColorScheme colors) {
+    return KeyedSubtree(
+      key: _toolbarEdgeDropKey,
+      child: DragTarget<_ToolbarDragData>(
+        key: const ValueKey<String>('toolbar-edge-drop-target'),
+        onWillAcceptWithDetails: (DragTargetDetails<_ToolbarDragData> details) {
+          return _getToolbarEdgeInsertionIndex(
+                details.data,
+                _getDragFeedbackCenter(details.data, details.offset),
+              ) !=
+              null;
+        },
+        onMove: (DragTargetDetails<_ToolbarDragData> details) {
+          final int? insertionIndex = _getToolbarEdgeInsertionIndex(
+            details.data,
+            _getDragFeedbackCenter(details.data, details.offset),
+          );
+          if (insertionIndex == null) {
+            return;
+          }
+          _setToolbarDropHover(
+            dragData: details.data,
+            insertionIndex: insertionIndex,
+          );
+        },
+        onLeave: (_ToolbarDragData? dragData) {
+          if (_hoveredToolbarInsertionIndex == 0 ||
+              _hoveredToolbarInsertionIndex == _appliedActionKeys.length) {
+            _clearToolbarDropHover();
+          }
+        },
+        onAcceptWithDetails: (DragTargetDetails<_ToolbarDragData> details) {
+          final int? insertionIndex = _getToolbarEdgeInsertionIndex(
+            details.data,
+            _getDragFeedbackCenter(details.data, details.offset),
+          );
+          if (insertionIndex == null) {
+            return;
+          }
+          _clearToolbarDropHover();
+          _insertDraggedAction(
+            details.data,
+            insertionIndex,
+            landingStartGlobalRect: _getDragFeedbackGlobalRect(
+              details.data,
+              details.offset,
+            ),
+          );
+        },
+        builder:
+            (
+              BuildContext context,
+              List<_ToolbarDragData?> candidateData,
+              List<dynamic> rejectedData,
+            ) {
+              return _buildAppliedToolbar(colors);
+            },
       ),
     );
   }
@@ -1885,32 +2077,41 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
               _finishPressingRepositoryAction(action.key);
             },
             child: Center(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 80),
-                curve: Curves.easeOutCubic,
-                // 仓库工具按压尺寸样式，以固定槽位中心收缩到上栏工具尺寸。
-                width: isPressed
-                    ? appliedActionSize.width
-                    : constraints.maxWidth,
-                height: isPressed ? appliedActionSize.height : 42,
-                child: Tooltip(
-                  message: action.label,
-                  triggerMode: TooltipTriggerMode.manual,
-                  child: Material(
-                    key: ValueKey<String>(
-                      'toolbar-repository-${action.key.name}',
-                    ),
-                    // 仓库工具背景样式，与上方工具按钮保持一致并略微增大。
-                    color: colors.surfaceContainerHigh,
-                    shape: RoundedRectangleBorder(
-                      side: BorderSide(color: colors.outline),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Center(
-                      child: _buildActionIcon(
-                        action,
-                        color: colors.onSurface,
-                        size: 21,
+              child: KeyedSubtree(
+                key: _getRepositoryActionKey(action.key),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 80),
+                  curve: Curves.easeOutCubic,
+                  // 仓库工具按压尺寸样式，以固定槽位中心收缩到上栏工具尺寸。
+                  width: isPressed
+                      ? appliedActionSize.width
+                      : constraints.maxWidth < 42
+                      ? constraints.maxWidth
+                      : 42,
+                  height: isPressed
+                      ? appliedActionSize.height
+                      : constraints.maxWidth < 42
+                      ? constraints.maxWidth
+                      : 42,
+                  child: Tooltip(
+                    message: action.label,
+                    triggerMode: TooltipTriggerMode.manual,
+                    child: Material(
+                      key: ValueKey<String>(
+                        'toolbar-repository-${action.key.name}',
+                      ),
+                      // 仓库工具背景样式，与上方工具按钮保持一致并略微增大。
+                      color: colors.surfaceContainerHigh,
+                      shape: RoundedRectangleBorder(
+                        side: BorderSide(color: colors.outline),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Center(
+                        child: _buildActionIcon(
+                          action,
+                          color: colors.onSurface,
+                          size: 21,
+                        ),
                       ),
                     ),
                   ),
@@ -1922,17 +2123,15 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
       ),
     );
 
-    return KeyedSubtree(
-      key: _getRepositoryActionKey(action.key),
-      child: _buildActionDraggable(
-        dragData: _ToolbarDragData(
-          actionKey: action.key,
-          source: _ToolbarActionSource.repository,
-        ),
-        action: action,
-        colors: colors,
-        child: actionTile,
+    return _buildActionDraggable(
+      dragData: _ToolbarDragData(
+        actionKey: action.key,
+        source: _ToolbarActionSource.repository,
+        feedbackSize: _getAppliedActionSize(),
       ),
+      action: action,
+      colors: colors,
+      child: actionTile,
     );
   }
 
@@ -1953,7 +2152,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
           _getRepositoryInsertionIndexForPosition(
             action.key,
             actionIndex,
-            _getDragFeedbackCenter(details.offset),
+            _getDragFeedbackCenter(details.data, details.offset),
           ),
         );
       },
@@ -1969,7 +2168,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
           _getRepositoryInsertionIndexForPosition(
             action.key,
             actionIndex,
-            _getDragFeedbackCenter(details.offset),
+            _getDragFeedbackCenter(details.data, details.offset),
           ),
         );
       },
@@ -2230,7 +2429,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
                   ),
                   child: SizedBox(
                     height: 44,
-                    child: _buildAppliedToolbar(colors),
+                    child: _buildToolbarEdgeDropTarget(colors),
                   ),
                 ),
               ),

@@ -1,12 +1,14 @@
 /*
- * 文件说明：笔记文件存储服务文件，负责将每一条笔记映射为一个独立的 .md 文件。
+ * 文件说明：笔记包存储服务文件，负责识别普通文件夹、笔记包和包内 Markdown 文档。
  *
  * 这个文件不负责界面，只负责和磁盘打交道。
- * 目前的存储规则是：
- * 1. 一条笔记 = 一个 Markdown 文件。
- * 2. 一个文件夹 = 磁盘上的真实文件夹。
- * 3. 界面里显示的 NoteItem 都是从真实文件和文件夹扫描出来的。
+ * 当前存储规则是：
+ * 1. 带有 .mynote.json 的文件夹才是笔记包。
+ * 2. 笔记包内直接子级的 .md 文件是可编辑文档。
+ * 3. 首次插入本地图片时才创建 assets，包内全部 Markdown 文档共享它。
+ * 4. 没有 .mynote.json 的文件夹是普通分类文件夹。
  */
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:my_note/models/note_item.dart';
@@ -15,35 +17,49 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 /*
- * 笔记文件存储服务。
+ * 笔记包存储服务。
  *
- * service 表示“服务类”，页面会调用这里的方法完成加载、保存、移动、删除。
- * 把文件操作集中在这里，可以避免页面代码里到处散落磁盘读写逻辑。
+ * 页面调用这里的方法加载、保存、移动和删除笔记包及其 Markdown 文档。
  */
 class NoteStorageService {
   /*
    * Android 外部共享存储根目录下的笔记目录。
-   *
-   * Android 真机上会把笔记保存到 /storage/emulated/0/myNote。
-   * 这个目录用户可以用文件管理器看到，方便直接备份或编辑 .md 文件。
    */
   static const String androidExternalNoteDirectoryPath =
       '/storage/emulated/0/myNote';
 
   /*
-   * 获取笔记目录。
+   * 笔记包元数据文件名。
+   */
+  static const String packageMetadataFileName = '.mynote.json';
+
+  /*
+   * 笔记包共享资源文件夹名称。
+   */
+  static const String packageAssetsDirectoryName = 'assets';
+
+  /*
+   * 笔记包元数据类型标识。
+   */
+  static const String packageMetadataKind = 'note-package';
+
+  /*
+   * 当前笔记包元数据结构版本。
+   */
+  static const int packageMetadataSchema = 1;
+
+  /*
+   * 获取笔记根目录。
    *
-   * Android 使用固定公共目录；桌面调试时没有这个目录，所以用应用文档目录兜底。
-   * 如果目录不存在，会自动创建。
+   * Android 使用固定公共目录；桌面调试时使用应用文档目录下的 notes。
    */
   Future<Directory> getNoteDirectory() async {
-    // Platform.isAndroid 用来判断当前运行平台。
     final Directory noteDirectory = Platform.isAndroid
         ? Directory(androidExternalNoteDirectoryPath)
         : await getDesktopFallbackNoteDirectory();
 
-    // recursive: true 表示父目录不存在时也一起创建。
     if (!await noteDirectory.exists()) {
+      // recursive: true 表示父目录不存在时也一起创建。
       await noteDirectory.create(recursive: true);
     }
 
@@ -52,9 +68,6 @@ class NoteStorageService {
 
   /*
    * 获取非 Android 平台的兜底笔记目录。
-   *
-   * 这个方法主要方便 Windows/macOS/Linux 调试。
-   * getApplicationDocumentsDirectory 会返回当前平台适合存放应用文档的位置。
    */
   Future<Directory> getDesktopFallbackNoteDirectory() async {
     final Directory documentDirectory =
@@ -63,30 +76,9 @@ class NoteStorageService {
   }
 
   /*
-   * 生成新的笔记文件名。
+   * 根据相对路径获取文件对象。
    *
-   * 使用时间戳可以降低文件名冲突概率。
-   * 这个方法目前保留作兜底，主要创建逻辑已经改为按标题生成文件名。
-   */
-  String createNoteFileName() {
-    return 'note-${DateTime.now().millisecondsSinceEpoch}.md';
-  }
-
-  /*
-   * 根据文件名获取笔记文件对象。
-   *
-   * File 对象只是一个“路径引用”，不代表文件一定已经存在。
-   */
-  Future<File> getNoteFile(String fileName) async {
-    final Directory noteDirectory = await getNoteDirectory();
-    return File('${noteDirectory.path}${Platform.pathSeparator}$fileName');
-  }
-
-  /*
-   * 根据相对路径获取笔记文件对象。
-   *
-   * 界面和业务逻辑统一使用正斜杠 / 保存相对路径；
-   * 真正访问磁盘前，再转换成当前系统需要的路径分隔符。
+   * 界面统一使用正斜杠保存相对路径，真正访问磁盘前再转换分隔符。
    */
   Future<File> getNoteFileByRelativePath(String relativePath) async {
     final Directory noteDirectory = await getNoteDirectory();
@@ -121,28 +113,95 @@ class NoteStorageService {
   }
 
   /*
-   * 根据文件内容和文件信息构建界面所需的笔记实体。
+   * 读取指定文件夹中的笔记包元数据。
    *
-   * 磁盘上的 File 只知道路径和修改时间；
-   * NoteItem 是界面更好用的数据结构，里面有标题、摘要、标签、目录等字段。
+   * 文件不存在、JSON 损坏或类型不匹配时返回 null，调用方会把它当作普通文件夹。
+   */
+  Future<Map<String, dynamic>?> readPackageMetadata(
+    Directory packageDirectory,
+  ) async {
+    final File metadataFile = File(
+      '${packageDirectory.path}${Platform.pathSeparator}$packageMetadataFileName',
+    );
+
+    if (!await metadataFile.exists()) {
+      return null;
+    }
+
+    try {
+      final Object? decodedMetadata = jsonDecode(
+        await metadataFile.readAsString(),
+      );
+      if (decodedMetadata is! Map<String, dynamic> ||
+          decodedMetadata['kind'] != packageMetadataKind ||
+          decodedMetadata['schema'] != packageMetadataSchema) {
+        return null;
+      }
+
+      return decodedMetadata;
+    } catch (error) {
+      // 元数据损坏时不猜测目录类型，避免把普通文件夹误识别为笔记包。
+      return null;
+    }
+  }
+
+  /*
+   * 判断指定文件夹是否是有效笔记包。
+   */
+  Future<bool> isNotePackageDirectory(Directory directory) async {
+    return await readPackageMetadata(directory) != null;
+  }
+
+  /*
+   * 写入笔记包元数据。
+   *
+   * entry 保存包的默认 Markdown 文件名，路径始终相对于笔记包根目录。
+   */
+  Future<void> writePackageMetadata(
+    Directory packageDirectory,
+    String entryFileName,
+  ) async {
+    final File metadataFile = File(
+      '${packageDirectory.path}${Platform.pathSeparator}$packageMetadataFileName',
+    );
+    const JsonEncoder encoder = JsonEncoder.withIndent('  ');
+    final Map<String, dynamic> metadata = <String, dynamic>{
+      'schema': packageMetadataSchema,
+      'kind': packageMetadataKind,
+      'entry': path.posix.basename(entryFileName.replaceAll('\\', '/')),
+    };
+
+    await metadataFile.writeAsString(
+      '${encoder.convert(metadata)}\n',
+      flush: true,
+    );
+  }
+
+  /*
+   * 根据 Markdown 文件构建界面所需的文档实体。
    */
   Future<NoteItem> createNoteItem(
     File file,
     String content,
     Directory noteDirectory,
+    Directory packageDirectory,
   ) async {
-    // stat 可以读取文件修改时间等系统信息。
     final FileStat fileStat = await file.stat();
-    // 把绝对路径转换成相对笔记根目录的路径，方便跨平台保存和展示。
     final String relativePath = path
         .relative(file.path, from: noteDirectory.path)
         .replaceAll('\\', '/');
+    final String packageRelativePath = path
+        .relative(packageDirectory.path, from: noteDirectory.path)
+        .replaceAll('\\', '/');
+    final String parentDirectoryPath = path.posix.dirname(packageRelativePath);
 
     return NoteItem(
       id: relativePath,
       fileName: path.posix.basename(relativePath),
       relativePath: relativePath,
-      directoryPath: extractDirectoryPath(relativePath),
+      packageRelativePath: packageRelativePath,
+      packageName: path.posix.basename(packageRelativePath),
+      directoryPath: parentDirectoryPath == '.' ? '' : parentDirectoryPath,
       title: extractNoteTitle(content),
       preview: extractNotePreview(content),
       content: content,
@@ -153,9 +212,120 @@ class NoteStorageService {
   }
 
   /*
-   * 在首次进入时写入一条欢迎笔记。
+   * 递归收集指定普通文件夹下的笔记包目录。
    *
-   * 如果笔记目录里没有任何 .md 文件，就创建一条欢迎笔记，避免首页空白。
+   * 遇到笔记包后停止向内递归，因此 assets 和其他包内目录不会进入应用目录树。
+   */
+  Future<void> collectPackageDirectories(
+    Directory currentDirectory,
+    List<Directory> packageDirectories,
+  ) async {
+    final List<FileSystemEntity> entities =
+        currentDirectory.listSync(followLinks: false)..sort(
+          (FileSystemEntity left, FileSystemEntity right) =>
+              left.path.compareTo(right.path),
+        );
+
+    for (final Directory directory in entities.whereType<Directory>()) {
+      if (await isNotePackageDirectory(directory)) {
+        packageDirectories.add(directory);
+        continue;
+      }
+
+      await collectPackageDirectories(directory, packageDirectories);
+    }
+  }
+
+  /*
+   * 读取全部有效笔记包目录。
+   */
+  Future<List<Directory>> loadPackageDirectories() async {
+    final Directory noteDirectory = await getNoteDirectory();
+    final List<Directory> packageDirectories = <Directory>[];
+
+    await collectPackageDirectories(noteDirectory, packageDirectories);
+    return packageDirectories;
+  }
+
+  /*
+   * 读取指定笔记包内直接子级的全部 Markdown 文档。
+   */
+  Future<List<NoteItem>> loadPackageNotes(String packageRelativePath) async {
+    final Directory noteDirectory = await getNoteDirectory();
+    final Directory packageDirectory = await getDirectoryByRelativePath(
+      packageRelativePath,
+    );
+
+    if (await readPackageMetadata(packageDirectory) == null) {
+      throw Exception('目标文件夹不是有效笔记包');
+    }
+
+    return loadPackageNotesFromDirectory(packageDirectory, noteDirectory);
+  }
+
+  /*
+   * 从真实笔记包目录读取全部 Markdown 文档。
+   */
+  Future<List<NoteItem>> loadPackageNotesFromDirectory(
+    Directory packageDirectory,
+    Directory noteDirectory,
+  ) async {
+    final List<File> markdownFiles =
+        packageDirectory
+            .listSync(followLinks: false)
+            .whereType<File>()
+            .where((File file) => file.path.toLowerCase().endsWith('.md'))
+            .toList()
+          ..sort(
+            (File left, File right) => path
+                .basename(left.path)
+                .toLowerCase()
+                .compareTo(path.basename(right.path).toLowerCase()),
+          );
+    final List<NoteItem> documents = <NoteItem>[];
+
+    for (final File file in markdownFiles) {
+      final String content = await file.readAsString();
+      documents.add(
+        await createNoteItem(file, content, noteDirectory, packageDirectory),
+      );
+    }
+
+    return documents;
+  }
+
+  /*
+   * 从笔记包文档列表中确定默认入口文档。
+   *
+   * 元数据中的 entry 无效时按文件名排序取第一篇，并修复元数据。
+   */
+  Future<NoteItem?> resolvePackageEntryNote(
+    Directory packageDirectory,
+    List<NoteItem> documents,
+  ) async {
+    if (documents.isEmpty) {
+      return null;
+    }
+
+    final Map<String, dynamic>? metadata = await readPackageMetadata(
+      packageDirectory,
+    );
+    final String? entryFileName = metadata?['entry'] is String
+        ? path.posix.basename(metadata!['entry'] as String)
+        : null;
+
+    for (final NoteItem document in documents) {
+      if (document.fileName == entryFileName) {
+        return document;
+      }
+    }
+
+    await writePackageMetadata(packageDirectory, documents.first.fileName);
+    return documents.first;
+  }
+
+  /*
+   * 创建首次启动时使用的欢迎笔记包。
    */
   Future<void> seedWelcomeNote() async {
     final String welcomeContent = <String>[
@@ -163,125 +333,182 @@ class NoteStorageService {
       '',
       '这是一个基于 Flutter 的 Markdown 笔记原型。',
       '',
-      '- 每一条笔记都会保存成一个独立的 `.md` 文件',
-      '- 支持标题、加粗、列表、待办、引用等基础编辑操作',
-      '- 你后续可以继续扩展标签、搜索、同步和附件能力',
+      '- 每一个笔记包都可以包含多篇 Markdown 文档',
+      '- 同一个笔记包内的文档共享 assets 文件夹',
+      '- 普通文件夹继续用于整理不同笔记包',
       '',
-      '> 现在就可以直接修改这条笔记内容。',
+      '> 现在就可以直接修改这篇文档。',
     ].join('\n');
 
-    final File file = await getNoteFile(
-      createFileNameFromTitle(extractNoteTitle(welcomeContent)),
+    await createNotePackage(
+      directoryPath: '',
+      packageName: '欢迎使用 myNote',
+      content: welcomeContent,
     );
-    // 先确保父目录存在，再写入文件内容。
-    await file.parent.create(recursive: true);
-    // flush: true 表示尽量立刻把内容刷到磁盘，降低异常退出时丢数据的概率。
-    await file.writeAsString(welcomeContent, flush: true);
   }
 
   /*
-   * 读取全部笔记列表。
+   * 读取首页需要展示的笔记包入口文档。
    *
-   * 这里会递归扫描笔记根目录下所有 .md 文件，把它们转换成 NoteItem。
+   * 每个有效笔记包只返回一篇默认入口文档，包内其他文档由编辑区抽屉加载。
    */
   Future<List<NoteItem>> loadNotes() async {
     final Directory noteDirectory = await getNoteDirectory();
-    // recursive: true 表示连子文件夹里的笔记也一起扫描。
-    List<FileSystemEntity> entities = noteDirectory.listSync(recursive: true);
-    List<File> files = entities
-        // 只保留文件，排除文件夹。
-        .whereType<File>()
-        // 只把 Markdown 文件当作笔记。
-        .where((File file) => file.path.endsWith('.md'))
-        .toList();
+    List<Directory> packageDirectories = await loadPackageDirectories();
+    final List<NoteItem> entryNotes = <NoteItem>[];
 
-    if (files.isEmpty) {
-      // 没有任何笔记时创建欢迎笔记，然后重新扫描一次。
+    for (final Directory packageDirectory in packageDirectories) {
+      final List<NoteItem> documents = await loadPackageNotesFromDirectory(
+        packageDirectory,
+        noteDirectory,
+      );
+      final NoteItem? entryNote = await resolvePackageEntryNote(
+        packageDirectory,
+        documents,
+      );
+      if (entryNote != null) {
+        entryNotes.add(entryNote);
+      }
+    }
+
+    if (entryNotes.isEmpty) {
       await seedWelcomeNote();
-      entities = noteDirectory.listSync(recursive: true);
-      files = entities
-          .whereType<File>()
-          .where((File file) => file.path.endsWith('.md'))
-          .toList();
+      packageDirectories = await loadPackageDirectories();
+
+      for (final Directory packageDirectory in packageDirectories) {
+        final List<NoteItem> documents = await loadPackageNotesFromDirectory(
+          packageDirectory,
+          noteDirectory,
+        );
+        final NoteItem? entryNote = await resolvePackageEntryNote(
+          packageDirectory,
+          documents,
+        );
+        if (entryNote != null) {
+          entryNotes.add(entryNote);
+        }
+      }
     }
 
-    final List<NoteItem> notes = <NoteItem>[];
-
-    for (final File file in files) {
-      // 读取文件正文，再根据正文和文件信息生成 NoteItem。
-      final String content = await file.readAsString();
-      notes.add(await createNoteItem(file, content, noteDirectory));
-    }
-
-    // 首页默认按更新时间倒序显示，最近编辑的排在前面。
-    notes.sort(
+    entryNotes.sort(
       (NoteItem left, NoteItem right) =>
           right.updatedAt.compareTo(left.updatedAt),
     );
-    return notes;
+    return entryNotes;
   }
 
   /*
-   * 读取全部文件夹路径列表。
+   * 递归收集普通分类文件夹路径。
    *
-   * 返回的是相对路径，例如 "工作/计划"，不是绝对磁盘路径。
+   * 笔记包及其内部目录不会加入结果，因此 assets 对应用保持隐藏。
+   */
+  Future<void> collectFolderPaths(
+    Directory currentDirectory,
+    Directory noteDirectory,
+    List<String> folderPaths,
+  ) async {
+    final List<FileSystemEntity> entities =
+        currentDirectory.listSync(followLinks: false)..sort(
+          (FileSystemEntity left, FileSystemEntity right) =>
+              left.path.compareTo(right.path),
+        );
+
+    for (final Directory directory in entities.whereType<Directory>()) {
+      if (await isNotePackageDirectory(directory)) {
+        continue;
+      }
+
+      folderPaths.add(
+        path
+            .relative(directory.path, from: noteDirectory.path)
+            .replaceAll('\\', '/'),
+      );
+      await collectFolderPaths(directory, noteDirectory, folderPaths);
+    }
+  }
+
+  /*
+   * 读取全部普通分类文件夹路径。
    */
   Future<List<String>> loadFolderPaths() async {
     final Directory noteDirectory = await getNoteDirectory();
-    final List<FileSystemEntity> entities = noteDirectory.listSync(
-      recursive: true,
-    );
-    final List<String> folderPaths =
-        entities
-            .whereType<Directory>()
-            .map((Directory directory) {
-              // 把真实目录路径转换为相对笔记根目录的路径。
-              return path
-                  .relative(directory.path, from: noteDirectory.path)
-                  .replaceAll('\\', '/');
-            })
-            .where((String relativePath) {
-              // 排除根目录自身，只保留用户创建的文件夹。
-              return relativePath.isNotEmpty && relativePath != '.';
-            })
-            .toList()
-          ..sort();
+    final List<String> folderPaths = <String>[];
 
+    await collectFolderPaths(noteDirectory, noteDirectory, folderPaths);
+    folderPaths.sort();
     return folderPaths;
   }
 
   /*
-   * 创建一条新的空白笔记。
-   *
-   * directoryPath 为空时创建在根目录；不为空时创建在指定文件夹里。
+   * 创建一条新的空白笔记包及其入口文档。
    */
   Future<NoteItem> createNote({String directoryPath = ''}) async {
-    final Directory noteDirectory = await getNoteDirectory();
     final String content = createInitialNoteContent('新建笔记');
-    final String title = extractNoteTitle(content);
-    final String relativePath = directoryPath.isEmpty
-        ? createFileNameFromTitle(title)
-        : '$directoryPath/${createFileNameFromTitle(title)}';
-    final File file = await getNoteFile(relativePath);
-    // 如果同名文件已存在，生成一个不冲突的新文件路径。
-    final File targetFile = await createAvailableFile(file);
-
-    await targetFile.parent.create(recursive: true);
-    await targetFile.writeAsString(content, flush: true);
-    return createNoteItem(targetFile, content, noteDirectory);
+    return createNotePackage(
+      directoryPath: directoryPath,
+      packageName: extractNoteTitle(content),
+      content: content,
+    );
   }
 
   /*
-   * 创建文件夹并返回实际创建的相对路径。
-   *
-   * 如果目标文件夹已存在，会自动生成 “文件夹-1” 这样的可用名称。
+   * 在指定普通文件夹内创建笔记包。
+   */
+  Future<NoteItem> createNotePackage({
+    required String directoryPath,
+    required String packageName,
+    required String content,
+  }) async {
+    final Directory noteDirectory = await getNoteDirectory();
+    final Directory parentDirectory = await getDirectoryByRelativePath(
+      directoryPath,
+    );
+
+    if (await isNotePackageDirectory(parentDirectory)) {
+      throw Exception('不能在另一个笔记包内创建笔记包');
+    }
+
+    final Directory packageDirectory = await createAvailableDirectory(
+      Directory(
+        '${parentDirectory.path}${Platform.pathSeparator}${sanitizeFileName(packageName)}',
+      ),
+    );
+    final String documentFileName = createFileNameFromTitle(
+      extractNoteTitle(content),
+    );
+    final File documentFile = File(
+      '${packageDirectory.path}${Platform.pathSeparator}$documentFileName',
+    );
+
+    await packageDirectory.create(recursive: true);
+    await documentFile.writeAsString(content, flush: true);
+    // 元数据最后写入，只有结构完整的文件夹才会被应用识别为笔记包。
+    await writePackageMetadata(packageDirectory, documentFileName);
+
+    return createNoteItem(
+      documentFile,
+      content,
+      noteDirectory,
+      packageDirectory,
+    );
+  }
+
+  /*
+   * 在指定普通文件夹内创建子文件夹并返回实际相对路径。
    */
   Future<String> createFolder(
     String parentDirectoryPath,
     String folderName,
   ) async {
     final Directory noteDirectory = await getNoteDirectory();
-    // 文件夹名也需要清理非法字符，避免系统拒绝创建。
+    final Directory parentDirectory = await getDirectoryByRelativePath(
+      parentDirectoryPath,
+    );
+
+    if (await isNotePackageDirectory(parentDirectory)) {
+      throw Exception('不能在笔记包内部创建普通文件夹');
+    }
+
     final String nextFolderName = sanitizeFileName(folderName);
     final String nextRelativePath = parentDirectoryPath.isEmpty
         ? nextFolderName
@@ -292,89 +519,163 @@ class NoteStorageService {
     final Directory targetDirectory = await createAvailableDirectory(directory);
 
     await targetDirectory.create(recursive: true);
-    // 返回相对路径，页面后续就可以用它进入这个文件夹。
     return path
         .relative(targetDirectory.path, from: noteDirectory.path)
         .replaceAll('\\', '/');
   }
 
   /*
-   * 保存指定笔记的内容。
+   * 在指定笔记包内创建新的 Markdown 文档。
+   */
+  Future<NoteItem> createPackageNote(String packageRelativePath) async {
+    final Directory noteDirectory = await getNoteDirectory();
+    final Directory packageDirectory = await getDirectoryByRelativePath(
+      packageRelativePath,
+    );
+
+    if (await readPackageMetadata(packageDirectory) == null) {
+      throw Exception('目标文件夹不是有效笔记包');
+    }
+
+    final String content = createInitialNoteContent('新建文档');
+    final File targetFile = await createAvailableFile(
+      File(
+        '${packageDirectory.path}${Platform.pathSeparator}${createFileNameFromTitle(extractNoteTitle(content))}',
+      ),
+    );
+
+    await targetFile.writeAsString(content, flush: true);
+    return createNoteItem(targetFile, content, noteDirectory, packageDirectory);
+  }
+
+  /*
+   * 将指定 Markdown 设置为所属笔记包的默认入口文档。
+   */
+  Future<void> setPackageEntryNote(NoteItem note) async {
+    final Directory packageDirectory = await getDirectoryByRelativePath(
+      note.packageRelativePath,
+    );
+    final File documentFile = await getNoteFileByRelativePath(
+      note.relativePath,
+    );
+
+    if (await readPackageMetadata(packageDirectory) == null ||
+        documentFile.parent.path != packageDirectory.path ||
+        !await documentFile.exists()) {
+      throw Exception('目标 Markdown 不属于有效笔记包');
+    }
+
+    await writePackageMetadata(packageDirectory, note.fileName);
+  }
+
+  /*
+   * 保存指定 Markdown 文档内容。
    *
-   * 保存时会重新提取标题；如果标题变了，文件名也跟着改。
+   * 标题变化时只重命名当前 Markdown；笔记包目录与共享 assets 不受影响。
    */
   Future<NoteItem> saveNoteContent(String relativePath, String content) async {
     final Directory noteDirectory = await getNoteDirectory();
     final File file = await getNoteFileByRelativePath(relativePath);
-    final String nextTitle = extractNoteTitle(content);
-    final String nextFileName = createFileNameFromTitle(nextTitle);
-    final String directoryPath = extractDirectoryPath(relativePath);
-    final String nextRelativePath = directoryPath.isEmpty
-        ? nextFileName
-        : '$directoryPath/$nextFileName';
+    final Directory packageDirectory = file.parent;
+    final Map<String, dynamic>? metadata = await readPackageMetadata(
+      packageDirectory,
+    );
+
+    if (metadata == null) {
+      throw Exception('当前 Markdown 不属于有效笔记包');
+    }
+
+    final String nextFileName = createFileNameFromTitle(
+      extractNoteTitle(content),
+    );
     File targetFile = file;
 
-    // 当 Markdown 第一行标题变化时，文件名也需要同步变化。
-    if (fileNameNeedsRename(path.posix.basename(relativePath), nextFileName)) {
-      final File renameTargetFile = await getNoteFileByRelativePath(
-        nextRelativePath,
-      );
+    if (fileNameNeedsRename(path.basename(file.path), nextFileName)) {
       targetFile = await createAvailableFile(
-        renameTargetFile,
+        File('${packageDirectory.path}${Platform.pathSeparator}$nextFileName'),
         preferredSourcePath: file.path,
       );
 
       if (await file.exists()) {
-        // rename 会移动/重命名文件，原路径会消失。
-        await file.rename(targetFile.path);
+        targetFile = await file.rename(targetFile.path);
       }
     }
 
     await targetFile.writeAsString(content, flush: true);
-    return createNoteItem(targetFile, content, noteDirectory);
+    if (metadata['entry'] == path.basename(file.path) &&
+        path.basename(targetFile.path) != path.basename(file.path)) {
+      await writePackageMetadata(
+        packageDirectory,
+        path.basename(targetFile.path),
+      );
+    }
+
+    return createNoteItem(targetFile, content, noteDirectory, packageDirectory);
   }
 
   /*
-   * 移动指定笔记到目标文件夹。
+   * 移动指定笔记包到目标普通文件夹。
    *
-   * targetDirectoryPath 为空字符串表示移动到根目录。
+   * 传入的 NoteItem 只用于定位所属笔记包，实际移动的是整个包目录。
    */
   Future<NoteItem> moveNoteToDirectory(
     NoteItem note,
     String targetDirectoryPath,
   ) async {
     if (note.directoryPath == targetDirectoryPath) {
-      // 已经在目标目录里就不需要移动。
       return note;
     }
 
     final Directory noteDirectory = await getNoteDirectory();
-    final File sourceFile = await getNoteFileByRelativePath(note.relativePath);
-    final Directory targetDirectory = await getDirectoryByRelativePath(
+    final Directory sourcePackageDirectory = await getDirectoryByRelativePath(
+      note.packageRelativePath,
+    );
+    final Directory targetParentDirectory = await getDirectoryByRelativePath(
       targetDirectoryPath,
     );
 
-    await targetDirectory.create(recursive: true);
+    if (await readPackageMetadata(sourcePackageDirectory) == null) {
+      throw Exception('当前条目不属于有效笔记包');
+    }
+    if (await isNotePackageDirectory(targetParentDirectory)) {
+      throw Exception('笔记包不能移动到另一个笔记包内部');
+    }
 
-    // 目标目录里如果有同名文件，自动生成不冲突的文件名。
-    final File targetFile = await createAvailableFile(
-      File('${targetDirectory.path}${Platform.pathSeparator}${note.fileName}'),
-      preferredSourcePath: sourceFile.path,
+    await targetParentDirectory.create(recursive: true);
+    final Directory targetPackageDirectory = await createAvailableDirectory(
+      Directory(
+        '${targetParentDirectory.path}${Platform.pathSeparator}${path.basename(sourcePackageDirectory.path)}',
+      ),
+      preferredSourcePath: sourcePackageDirectory.path,
     );
-    final File movedFile = await sourceFile.rename(targetFile.path);
-    return createNoteItem(movedFile, note.content, noteDirectory);
+    final Directory movedPackageDirectory = await sourcePackageDirectory.rename(
+      targetPackageDirectory.path,
+    );
+    final List<NoteItem> movedDocuments = await loadPackageNotesFromDirectory(
+      movedPackageDirectory,
+      noteDirectory,
+    );
+    final NoteItem? entryNote = await resolvePackageEntryNote(
+      movedPackageDirectory,
+      movedDocuments,
+    );
+
+    if (entryNote == null) {
+      throw Exception('笔记包内没有可打开的 Markdown 文档');
+    }
+
+    return entryNote;
   }
 
   /*
-   * 移动指定文件夹到目标父文件夹。
+   * 移动指定普通文件夹到目标父文件夹。
    *
-   * 这里移动的是整个目录，目录里的子文件夹和笔记会一起移动。
+   * 文件夹内的普通子文件夹和笔记包会一起移动。
    */
   Future<String> moveFolderToDirectory(
     String sourceDirectoryPath,
     String targetParentDirectoryPath,
   ) async {
-    // 先算出当前文件夹原来的父目录，用来判断是否真的需要移动。
     final String currentParentDirectoryPath = sourceDirectoryPath.contains('/')
         ? sourceDirectoryPath.substring(0, sourceDirectoryPath.lastIndexOf('/'))
         : '';
@@ -382,12 +683,10 @@ class NoteStorageService {
     if (sourceDirectoryPath.isEmpty ||
         sourceDirectoryPath == targetParentDirectoryPath ||
         currentParentDirectoryPath == targetParentDirectoryPath) {
-      // 根目录不能移动；移动到自己或原父目录也等于没变化。
       return sourceDirectoryPath;
     }
 
     if (targetParentDirectoryPath.startsWith('$sourceDirectoryPath/')) {
-      // 防止把文件夹移动到自己的子文件夹里，这会造成目录递归嵌套错误。
       throw Exception('不能把文件夹移动到它自己的子文件夹里');
     }
 
@@ -400,9 +699,14 @@ class NoteStorageService {
     );
     final String folderName = path.posix.basename(sourceDirectoryPath);
 
-    await targetParentDirectory.create(recursive: true);
+    if (await isNotePackageDirectory(sourceDirectory)) {
+      throw Exception('笔记包必须使用笔记包移动操作');
+    }
+    if (await isNotePackageDirectory(targetParentDirectory)) {
+      throw Exception('普通文件夹不能移动到笔记包内部');
+    }
 
-    // 如果目标位置已有同名文件夹，生成一个不冲突的目录名。
+    await targetParentDirectory.create(recursive: true);
     final Directory targetDirectory = await createAvailableDirectory(
       Directory(
         '${targetParentDirectory.path}${Platform.pathSeparator}$folderName',
@@ -418,42 +722,41 @@ class NoteStorageService {
   }
 
   /*
-   * 删除指定笔记文件。
-   *
-   * 这里只删除单个 .md 文件，不会删除它所在的文件夹。
+   * 删除指定 Markdown 所属的整个笔记包。
    */
   Future<void> deleteNote(String relativePath) async {
-    final File file = await getNoteFileByRelativePath(relativePath);
+    final File documentFile = await getNoteFileByRelativePath(relativePath);
+    final Directory packageDirectory = documentFile.parent;
 
-    if (await file.exists()) {
-      await file.delete();
+    if (await readPackageMetadata(packageDirectory) == null) {
+      throw Exception('当前 Markdown 不属于有效笔记包');
     }
+
+    await packageDirectory.delete(recursive: true);
   }
 
   /*
-   * 删除指定文件夹及其内部内容。
-   *
-   * recursive: true 会连同内部所有笔记和子文件夹一起删除。
+   * 删除指定普通文件夹及其内部内容。
    */
   Future<void> deleteFolder(String relativePath) async {
     final Directory directory = await getDirectoryByRelativePath(relativePath);
 
     if (await directory.exists()) {
+      if (await isNotePackageDirectory(directory)) {
+        throw Exception('笔记包必须使用笔记包删除操作');
+      }
       await directory.delete(recursive: true);
     }
   }
 
   /*
    * 为目标文件生成不冲突的实际文件路径。
-   *
-   * 例如目标是 “计划.md”，但它已经存在，就尝试 “计划-1.md”“计划-2.md”。
    */
   Future<File> createAvailableFile(
     File targetFile, {
     String? preferredSourcePath,
   }) async {
     if (!await targetFile.exists() || targetFile.path == preferredSourcePath) {
-      // 文件不存在，或者目标就是原文件时，可以直接使用。
       return targetFile;
     }
 
@@ -463,7 +766,6 @@ class NoteStorageService {
     int index = 1;
 
     while (true) {
-      // 循环尝试带编号的文件名，直到找到一个不存在的路径。
       final File candidateFile = File(
         '$directoryPath${Platform.pathSeparator}$baseName-$index$extension',
       );
@@ -477,8 +779,6 @@ class NoteStorageService {
 
   /*
    * 为目标文件夹生成不冲突的实际文件夹路径。
-   *
-   * 逻辑和 createAvailableFile 类似，只是处理对象从 File 换成 Directory。
    */
   Future<Directory> createAvailableDirectory(
     Directory targetDirectory, {
@@ -486,7 +786,6 @@ class NoteStorageService {
   }) async {
     if (!await targetDirectory.exists() ||
         targetDirectory.path == preferredSourcePath) {
-      // 文件夹不存在，或者目标就是原文件夹时，可以直接使用。
       return targetDirectory;
     }
 
@@ -495,7 +794,6 @@ class NoteStorageService {
     int index = 1;
 
     while (true) {
-      // 循环尝试带编号的文件夹名，直到找到一个不存在的路径。
       final Directory candidateDirectory = Directory(
         '$parentPath${Platform.pathSeparator}$baseName-$index',
       );
@@ -508,9 +806,7 @@ class NoteStorageService {
   }
 
   /*
-   * 判断文件名是否需要按标题进行重命名。
-   *
-   * 目前规则很直接：当前文件名和新标题生成的文件名不同，就需要重命名。
+   * 判断当前 Markdown 文件名是否需要按标题重命名。
    */
   bool fileNameNeedsRename(String currentFileName, String nextFileName) {
     return currentFileName != nextFileName;
