@@ -174,11 +174,6 @@ const List<ToolbarActionItem> toolbarActions = <ToolbarActionItem>[
     icon: Icons.format_italic_rounded,
   ),
   ToolbarActionItem(
-    key: ToolbarActionKey.strikeThrough,
-    label: '删除线',
-    icon: Icons.strikethrough_s_rounded,
-  ),
-  ToolbarActionItem(
     key: ToolbarActionKey.list,
     label: '无序列表',
     icon: Icons.format_list_bulleted_rounded,
@@ -187,41 +182,6 @@ const List<ToolbarActionItem> toolbarActions = <ToolbarActionItem>[
     key: ToolbarActionKey.orderedList,
     label: '有序列表',
     icon: Icons.format_list_numbered_rounded,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.checkList,
-    label: '待办列表',
-    icon: Icons.check_box_outlined,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.blockQuote,
-    label: '引用',
-    icon: Icons.format_quote_rounded,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.codeBlock,
-    label: '代码块',
-    icon: Icons.data_object_rounded,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.inlineCode,
-    label: '行内代码',
-    icon: Icons.code_rounded,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.insertTable,
-    label: '插入表格',
-    icon: Icons.table_chart_outlined,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.undo,
-    label: '撤销',
-    icon: Icons.undo_rounded,
-  ),
-  ToolbarActionItem(
-    key: ToolbarActionKey.redo,
-    label: '重做',
-    icon: Icons.redo_rounded,
   ),
 ];
 
@@ -267,9 +227,9 @@ List<ToolbarActionKey> toolbarActionKeysFromNames(Iterable<String>? names) {
   final List<ToolbarActionKey> result = <ToolbarActionKey>[];
 
   for (final String name in cachedNames) {
-    for (final ToolbarActionKey actionKey in ToolbarActionKey.values) {
-      if (actionKey.name == name && !result.contains(actionKey)) {
-        result.add(actionKey);
+    for (final ToolbarActionItem action in toolbarActions) {
+      if (action.key.name == name && !result.contains(action.key)) {
+        result.add(action.key);
         break;
       }
     }
@@ -292,6 +252,11 @@ List<ToolbarActionKey> toolbarActionKeysFromNames(Iterable<String>? names) {
  */
 List<String> toolbarActionKeyNames(Iterable<ToolbarActionKey> actionKeys) {
   return actionKeys
+      .where(
+        (ToolbarActionKey actionKey) => toolbarActions.any(
+          (ToolbarActionItem action) => action.key == actionKey,
+        ),
+      )
       .map((ToolbarActionKey actionKey) => actionKey.name)
       .toList();
 }
@@ -601,7 +566,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
   }
 
   /*
-   * 去重并限制外部传入的工具数量。
+   * 过滤不可用工具、去重并限制外部传入的工具数量。
    */
   List<ToolbarActionKey> _normalizeActionKeys(
     Iterable<ToolbarActionKey> actionKeys,
@@ -609,7 +574,10 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
     final List<ToolbarActionKey> result = <ToolbarActionKey>[];
 
     for (final ToolbarActionKey actionKey in actionKeys) {
-      if (!result.contains(actionKey)) {
+      if (toolbarActions.any(
+            (ToolbarActionItem action) => action.key == actionKey,
+          ) &&
+          !result.contains(actionKey)) {
         result.add(actionKey);
       }
 

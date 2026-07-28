@@ -198,9 +198,24 @@ void main() {
   });
 
   /*
-   * 验证缓存工具名称会过滤未知项、去重并限制为最多七项。
+   * 验证缓存工具名称会过滤未知项、已移除工具、重复项并限制为最多七项。
    */
   test('缓存工具顺序可以安全恢复', () {
+    expect(
+      toolbarActions.map((ToolbarActionItem action) => action.key),
+      <ToolbarActionKey>[
+        ToolbarActionKey.title,
+        ToolbarActionKey.subtitle,
+        ToolbarActionKey.heading3,
+        ToolbarActionKey.heading4,
+        ToolbarActionKey.heading5,
+        ToolbarActionKey.heading6,
+        ToolbarActionKey.bold,
+        ToolbarActionKey.italic,
+        ToolbarActionKey.list,
+        ToolbarActionKey.orderedList,
+      ],
+    );
     expect(toolbarActionKeysFromNames(null), defaultToolbarActionKeys);
     expect(toolbarActionKeysFromNames(const <String>[]), isEmpty);
     expect(
@@ -219,11 +234,19 @@ void main() {
         ToolbarActionKey.bold,
         ToolbarActionKey.heading6,
         ToolbarActionKey.italic,
-        ToolbarActionKey.strikeThrough,
-        ToolbarActionKey.checkList,
-        ToolbarActionKey.blockQuote,
-        ToolbarActionKey.codeBlock,
       ],
+    );
+    expect(
+      toolbarActionKeyNames(const <ToolbarActionKey>[
+        ToolbarActionKey.bold,
+        ToolbarActionKey.insertTable,
+        ToolbarActionKey.orderedList,
+      ]),
+      <String>['bold', 'orderedList'],
+    );
+    expect(
+      toolbarActionKeysFromNames(const <String>['undo', 'redo']),
+      defaultToolbarActionKeys,
     );
   });
 
@@ -570,12 +593,7 @@ void main() {
       const ValueKey<String>('toolbar-repository-heading6'),
     );
     final double firstRowTop = tester.getTopLeft(firstRepositoryAction).dy;
-    for (final String actionName in <String>[
-      'bold',
-      'italic',
-      'strikeThrough',
-      'checkList',
-    ]) {
+    for (final String actionName in <String>['bold', 'italic']) {
       expect(
         tester
             .getTopLeft(
@@ -586,12 +604,8 @@ void main() {
       );
     }
     expect(
-      tester
-          .getTopLeft(
-            find.byKey(const ValueKey<String>('toolbar-repository-blockQuote')),
-          )
-          .dy,
-      greaterThan(firstRowTop),
+      find.byKey(const ValueKey<String>('toolbar-repository-strikeThrough')),
+      findsNothing,
     );
     expect(tester.getSize(firstRepositoryAction).height, 42);
     expect(tester.getSize(firstRepositoryAction).width, 42);
@@ -678,7 +692,7 @@ void main() {
   testWidgets('工具仓库可以从工具间隙竖向滚动', (WidgetTester tester) async {
     final MarkdownEditorController controller = MarkdownEditorController();
     addTearDown(controller.dispose);
-    tester.view.physicalSize = const Size(320, 200);
+    tester.view.physicalSize = const Size(320, 140);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -689,18 +703,19 @@ void main() {
         home: Scaffold(
           body: MarkdownToolbar(
             controller: controller.quillController,
+            initialActionKeys: const <ToolbarActionKey>[],
             onPressedAction: (ToolbarActionKey actionKey) {},
           ),
         ),
       ),
     );
 
-    await tester.longPress(
-      find.byKey(const ValueKey<String>('toolbar-active-title')),
+    await tester.tap(
+      find.byKey(const ValueKey<String>('toolbar-empty-customize')),
     );
     await tester.pump(const Duration(milliseconds: 300));
     final Finder firstRepositoryAction = find.byKey(
-      const ValueKey<String>('toolbar-repository-heading6'),
+      const ValueKey<String>('toolbar-repository-title'),
     );
     final double originalTop = tester.getTopLeft(firstRepositoryAction).dy;
     final ScrollableState repositoryScrollState = tester.state<ScrollableState>(
@@ -713,13 +728,13 @@ void main() {
       tester
           .getSize(find.byKey(const ValueKey<String>('toolbar-repository')))
           .height,
-      lessThan(200),
+      lessThan(140),
     );
     expect(repositoryScrollState.position.maxScrollExtent, greaterThan(0));
 
     final Rect firstActionRect = tester.getRect(firstRepositoryAction);
     final Rect secondActionRect = tester.getRect(
-      find.byKey(const ValueKey<String>('toolbar-repository-bold')),
+      find.byKey(const ValueKey<String>('toolbar-repository-subtitle')),
     );
     await tester.flingFrom(
       Offset(
@@ -1154,7 +1169,7 @@ void main() {
   });
 
   /*
-   * 验证靠后的工具飞回仓库前会先滚动到仓库可见区域。
+   * 验证靠后的保留工具飞回仓库前会先滚动到仓库可见区域。
    */
   testWidgets('移除靠后工具时仓库会显示飞回终点', (WidgetTester tester) async {
     final MarkdownEditorController controller = MarkdownEditorController();
@@ -1170,7 +1185,9 @@ void main() {
         home: Scaffold(
           body: MarkdownToolbar(
             controller: controller.quillController,
-            initialActionKeys: const <ToolbarActionKey>[ToolbarActionKey.redo],
+            initialActionKeys: const <ToolbarActionKey>[
+              ToolbarActionKey.heading6,
+            ],
             onPressedAction: (ToolbarActionKey actionKey) {},
           ),
         ),
@@ -1178,10 +1195,10 @@ void main() {
     );
 
     await tester.longPress(
-      find.byKey(const ValueKey<String>('toolbar-active-redo')),
+      find.byKey(const ValueKey<String>('toolbar-active-heading6')),
     );
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.byTooltip('移除重做'));
+    await tester.tap(find.byTooltip('移除六级标题'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pump();
@@ -1191,7 +1208,7 @@ void main() {
       find.byKey(const ValueKey<String>('toolbar-repository')),
     );
     final Rect returnedActionRect = tester.getRect(
-      find.byKey(const ValueKey<String>('toolbar-repository-redo')),
+      find.byKey(const ValueKey<String>('toolbar-repository-heading6')),
     );
     expect(repositoryRect.overlaps(returnedActionRect), isTrue);
   });
