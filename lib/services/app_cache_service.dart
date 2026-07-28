@@ -24,6 +24,7 @@ class AppCacheData {
     required this.sortMode,
     required this.viewMode,
     required this.isDarkMode,
+    this.packageDrawerRailPosition = 0.5,
     this.toolbarActionKeys,
   });
 
@@ -36,6 +37,7 @@ class AppCacheData {
       sortMode: 'updatedAt',
       viewMode: 'grid',
       isDarkMode: false,
+      packageDrawerRailPosition: 0.5,
       toolbarActionKeys: null,
     );
   }
@@ -70,6 +72,12 @@ class AppCacheData {
       isDarkMode: json['isDarkMode'] is bool
           ? json['isDarkMode'] as bool
           : false,
+      packageDrawerRailPosition: json['packageDrawerRailPosition'] is num
+          ? (json['packageDrawerRailPosition'] as num)
+                .toDouble()
+                .clamp(0.0, 1.0)
+                .toDouble()
+          : 0.5,
       toolbarActionKeys: rawToolbarActionKeys is List
           ? rawToolbarActionKeys.whereType<String>().toList()
           : null,
@@ -97,6 +105,11 @@ class AppCacheData {
   final bool isDarkMode;
 
   /*
+   * 笔记包文档抽屉侧边入口的归一化垂直位置。
+   */
+  final double packageDrawerRailPosition;
+
+  /*
    * 笔记详情页工具栏操作顺序，空列表表示工具栏不显示任何操作。
    */
   final List<String>? toolbarActionKeys;
@@ -110,6 +123,7 @@ class AppCacheData {
       'sortMode': sortMode,
       'viewMode': viewMode,
       'isDarkMode': isDarkMode,
+      'packageDrawerRailPosition': packageDrawerRailPosition,
       'toolbarActionKeys': toolbarActionKeys,
     };
   }

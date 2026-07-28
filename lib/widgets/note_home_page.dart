@@ -320,6 +320,11 @@ class _NoteHomePageState extends State<NoteHomePage>
   static const double _dragCardScale = 0.90;
 
   /*
+   * 笔记包文档抽屉侧边入口高度。
+   */
+  static const double _packageDrawerRailHeight = 48;
+
+  /*
    * 笔记存储服务实例。
    */
   final NoteStorageService _noteStorageService = NoteStorageService();
@@ -395,6 +400,12 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 包内文档切换抽屉是否展开。
    */
   bool _isPackageDrawerOpen = false;
+
+  /*
+   * 笔记包文档抽屉侧边入口的归一化垂直位置。
+   */
+  final ValueNotifier<double> _packageDrawerRailPosition =
+      ValueNotifier<double>(0.5);
 
   /*
    * 包内文档切换抽屉是否正在重新读取文件。
@@ -569,6 +580,7 @@ class _NoteHomePageState extends State<NoteHomePage>
     _editorController.dispose();
     _editorFocusNode.dispose();
     _editorScrollController.dispose();
+    _packageDrawerRailPosition.dispose();
     super.dispose();
   }
 
@@ -664,6 +676,7 @@ class _NoteHomePageState extends State<NoteHomePage>
           ..addAll(appCache.folderVisitCounts);
         _activeSortMode = _getSortModeFromCache(appCache.sortMode);
         _activeViewMode = _getViewModeFromCache(appCache.viewMode);
+        _packageDrawerRailPosition.value = appCache.packageDrawerRailPosition;
         _toolbarActionKeys = toolbarActionKeysFromNames(
           appCache.toolbarActionKeys,
         );
@@ -1165,6 +1178,7 @@ class _NoteHomePageState extends State<NoteHomePage>
           sortMode: _activeSortMode.name,
           viewMode: _activeViewMode.name,
           isDarkMode: appCache.isDarkMode,
+          packageDrawerRailPosition: _packageDrawerRailPosition.value,
           toolbarActionKeys: toolbarActionKeyNames(_toolbarActionKeys),
         ),
       );
@@ -2154,6 +2168,27 @@ class _NoteHomePageState extends State<NoteHomePage>
       });
       await _showMessageDialog('读取笔记包失败', error.toString());
     }
+  }
+
+  /*
+   * 根据垂直拖动距离更新文档抽屉侧边入口位置。
+   */
+  void _handlePackageDrawerRailDrag(double deltaY, double maximumTop) {
+    if (maximumTop <= 0) {
+      return;
+    }
+
+    _packageDrawerRailPosition.value =
+        (_packageDrawerRailPosition.value + deltaY / maximumTop)
+            .clamp(0.0, 1.0)
+            .toDouble();
+  }
+
+  /*
+   * 保存文档抽屉侧边入口位置。
+   */
+  void _savePackageDrawerRailPosition() {
+    unawaited(_saveAppCache());
   }
 
   /*
@@ -4198,32 +4233,75 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 构建编辑区左侧的笔记包文档抽屉把手。
    */
   Widget _buildPackageDrawerRail() {
-    return Positioned(
-      left: 0,
-      top: 118,
-      child: IgnorePointer(
-        ignoring: _isPackageDrawerOpen,
-        child: AnimatedOpacity(
-          opacity: _isPackageDrawerOpen ? 0 : 1,
-          duration: const Duration(milliseconds: 160),
-          child: Material(
-            // 文档抽屉细条材质样式
-            color: _colors.surfaceContainerHighest,
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(8),
-            ),
-            child: Tooltip(
-              message: '切换笔记包内文档',
-              child: IconButton(
-                onPressed: () {
-                  _togglePackageDrawer();
-                },
-                icon: const Icon(Icons.article_outlined),
-                color: _colors.onSurface,
+    return Positioned.fill(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double maximumTop =
+              constraints.maxHeight > _packageDrawerRailHeight
+              ? constraints.maxHeight - _packageDrawerRailHeight
+              : 0;
+
+          return Stack(
+            // 文档抽屉侧边入口在编辑面板内自适应定位样式
+            children: <Widget>[
+              Positioned(
+                left: 0,
+                top: 0,
+                height: _packageDrawerRailHeight,
+                child: ValueListenableBuilder<double>(
+                  valueListenable: _packageDrawerRailPosition,
+                  child: IgnorePointer(
+                    ignoring: _isPackageDrawerOpen,
+                    child: AnimatedOpacity(
+                      opacity: _isPackageDrawerOpen ? 0 : 1,
+                      duration: const Duration(milliseconds: 160),
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onVerticalDragUpdate: (DragUpdateDetails details) {
+                          _handlePackageDrawerRailDrag(
+                            details.delta.dy,
+                            maximumTop,
+                          );
+                        },
+                        onVerticalDragEnd: (DragEndDetails _) {
+                          _savePackageDrawerRailPosition();
+                        },
+                        onVerticalDragCancel: _savePackageDrawerRailPosition,
+                        child: RepaintBoundary(
+                          child: Material(
+                            // 文档抽屉细条材质样式
+                            color: _colors.surfaceContainerHighest,
+                            borderRadius: const BorderRadius.horizontal(
+                              right: Radius.circular(8),
+                            ),
+                            child: Tooltip(
+                              message: '切换笔记包内文档',
+                              child: IconButton(
+                                onPressed: () {
+                                  _togglePackageDrawer();
+                                },
+                                icon: const Icon(Icons.article_outlined),
+                                color: _colors.onSurface,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  builder:
+                      (BuildContext context, double position, Widget? child) {
+                        // 拖动时只更新入口的合成位移，避免整张编辑页重新布局。
+                        return Transform.translate(
+                          offset: Offset(0, maximumTop * position),
+                          child: child,
+                        );
+                      },
+                ),
               ),
-            ),
-          ),
-        ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -4581,7 +4659,7 @@ class _NoteHomePageState extends State<NoteHomePage>
             children: <Widget>[
               Padding(
                 // 编辑面板标题行独立边距样式
-                padding: const EdgeInsets.fromLTRB(0, 18, 22, 0),
+                padding: const EdgeInsets.fromLTRB(0, 14, 22, 0),
                 child: Row(
                   // 编辑面板标题行横向布局样式
                   children: <Widget>[
@@ -4601,16 +4679,6 @@ class _NoteHomePageState extends State<NoteHomePage>
                       ),
                     ),
                     const Spacer(),
-                    Tooltip(
-                      message: '切换笔记包内文档',
-                      child: IconButton(
-                        onPressed: () {
-                          _togglePackageDrawer();
-                        },
-                        icon: const Icon(Icons.article_outlined),
-                        color: _colors.onSurface,
-                      ),
-                    ),
                     IconButton(
                       tooltip: '删除笔记包',
                       onPressed: () {
@@ -4635,7 +4703,7 @@ class _NoteHomePageState extends State<NoteHomePage>
               Expanded(
                 child: Padding(
                   // 编辑器正文独立边距样式，工具栏不继承该横向边距。
-                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 12),
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
                   child: _isToolbarCustomizing
                       ? ColoredBox(
                           // 工具仓库显示期间正文区域背景样式
@@ -4750,9 +4818,32 @@ class _NoteHomePageState extends State<NoteHomePage>
       },
       child: Scaffold(
         backgroundColor: _colors.surface,
-        body: _isLoading
-            ? Center(child: CircularProgressIndicator(color: _colors.primary))
-            : SafeArea(child: _buildBody()),
+        body: Stack(
+          // 页面内容与系统底部安全区背景分层布局样式
+          children: <Widget>[
+            Positioned.fill(
+              child: _isLoading
+                  ? Center(
+                      child: CircularProgressIndicator(color: _colors.primary),
+                    )
+                  : SafeArea(child: _buildBody()),
+            ),
+            Positioned(
+              // 系统底部手势区背景定位样式
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SizedBox(
+                // 系统底部手势区背景高度样式，键盘弹出后会自动收起。
+                height: MediaQuery.paddingOf(context).bottom,
+                child: ColoredBox(
+                  // 系统底部手势区背景色与编辑工具栏保持一致。
+                  color: _colors.surfaceContainerHigh,
+                ),
+              ),
+            ),
+          ],
+        ),
         floatingActionButton:
             _isSelectionMode || (!isWideLayout && !_isCompactBrowserVisible)
             ? null

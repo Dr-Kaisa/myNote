@@ -515,9 +515,9 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   }
 
   /*
-   * 按指定顶部间距构建 Quill 正文编辑区域。
+   * 按指定内边距构建使用原生滚动优化的 Quill 正文编辑区域。
    */
-  Widget _buildQuillEditor(BuildContext context, double topPadding) {
+  Widget _buildQuillEditor(BuildContext context, EdgeInsets padding) {
     return QuillEditor(
       controller: controller,
       focusNode: focusNode,
@@ -527,7 +527,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         scrollable: true,
         placeholder: '在这里记录今天的想法',
         // 编辑器正文内边距样式
-        padding: EdgeInsets.fromLTRB(0, topPadding, 0, 30),
+        padding: padding,
         // 编辑器标题、列表和正文排版样式
         customStyles: _buildEditorStyles(Theme.of(context).colorScheme),
         // 列表圆点和序号按中文正文的视觉中心进行垂直校正。
@@ -548,51 +548,55 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (metadataText == null) {
-      return _buildQuillEditor(context, 6);
+      return _buildQuillEditor(context, const EdgeInsets.fromLTRB(0, 6, 0, 24));
     }
 
-    return Stack(
-      // 编辑器与滚动元信息使用同一可用区域样式
-      fit: StackFit.expand,
-      children: <Widget>[
-        _buildQuillEditor(context, 66),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: AnimatedBuilder(
-            animation: scrollController,
-            child: IgnorePointer(
-              child: Padding(
-                // 正文元信息顶部间距样式
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(
-                  metadataText!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  // 正文元信息文字样式
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 13,
-                    height: 1.4,
-                    letterSpacing: 0,
+    return ClipRect(
+      // 信息行与正文共用编辑区域裁剪图层样式
+      clipBehavior: Clip.hardEdge,
+      child: Stack(
+        // 编辑器与信息行使用同一可用区域样式
+        fit: StackFit.expand,
+        children: <Widget>[
+          _buildQuillEditor(context, const EdgeInsets.fromLTRB(0, 28, 0, 24)),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: AnimatedBuilder(
+              animation: scrollController,
+              child: IgnorePointer(
+                child: Padding(
+                  // 正文元信息紧凑顶部间距样式
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    metadataText!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // 正文元信息文字样式
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                      height: 1.4,
+                      letterSpacing: 0,
+                    ),
                   ),
                 ),
               ),
+              builder: (BuildContext context, Widget? child) {
+                // 信息行只跟随正文滚动偏移移动，不触发正文重新布局。
+                return Transform.translate(
+                  offset: Offset(
+                    0,
+                    scrollController.hasClients ? -scrollController.offset : 0,
+                  ),
+                  child: child,
+                );
+              },
             ),
-            builder: (BuildContext context, Widget? child) {
-              // 元信息与正文使用相同滚动偏移，因此离开顶部时不会固定停留。
-              return Transform.translate(
-                offset: Offset(
-                  0,
-                  scrollController.hasClients ? -scrollController.offset : 0,
-                ),
-                child: child,
-              );
-            },
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

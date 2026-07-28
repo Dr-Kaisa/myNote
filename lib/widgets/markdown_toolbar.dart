@@ -2425,7 +2425,7 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
                   ),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 0,
-                    vertical: 8,
+                    vertical: 6,
                   ),
                   child: SizedBox(
                     height: 44,

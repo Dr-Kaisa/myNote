@@ -1,0 +1,63 @@
+<!-- 此文件用于还原原图中的彩虹铅笔与闪光图标。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="59" height="59" viewBox="56 32 59 59" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">彩虹铅笔图标</title>
+  <desc id="description">一支带彩虹渐变轮廓的铅笔，左上和右下各有一枚彩色闪光。</desc>
+
+  <defs>
+    <!-- 暖色渐变用于铅笔左侧和顶部轮廓。 -->
+    <linearGradient id="pencilWarm" x1="65" y1="83" x2="109" y2="45" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8D5BDE"/>
+      <stop offset="0.2" stop-color="#B650CE"/>
+      <stop offset="0.42" stop-color="#D653A2"/>
+      <stop offset="0.62" stop-color="#D77D5D"/>
+      <stop offset="0.8" stop-color="#A8BD4E"/>
+      <stop offset="1" stop-color="#66C95F"/>
+    </linearGradient>
+
+    <!-- 冷色渐变用于铅笔右侧和笔尖底边。 -->
+    <linearGradient id="pencilCool" x1="65" y1="83" x2="109" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9259DD"/>
+      <stop offset="0.3" stop-color="#5B70D5"/>
+      <stop offset="0.56" stop-color="#3298CE"/>
+      <stop offset="0.78" stop-color="#2ABCA9"/>
+      <stop offset="1" stop-color="#5CC66F"/>
+    </linearGradient>
+
+    <!-- 笔帽分隔线渐变用于衔接黄色与青绿色。 -->
+    <linearGradient id="pencilBand" x1="91" y1="47" x2="102" y2="57" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#AEC04E"/>
+      <stop offset="0.52" stop-color="#72C66A"/>
+      <stop offset="1" stop-color="#35B99A"/>
+    </linearGradient>
+
+    <!-- 橙色闪光渐变用于左上角装饰。 -->
+    <linearGradient id="orangeSpark" x1="62" y1="39" x2="70" y2="53" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9638"/>
+      <stop offset="0.48" stop-color="#F87632"/>
+      <stop offset="1" stop-color="#EE5550"/>
+    </linearGradient>
+
+    <!-- 蓝色闪光渐变用于右下角装饰。 -->
+    <linearGradient id="blueSpark" x1="101" y1="72" x2="109" y2="87" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26B9ED"/>
+      <stop offset="0.52" stop-color="#2499E4"/>
+      <stop offset="1" stop-color="#3976CD"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 左上闪光层使用收尖的四角星轮廓。 -->
+  <path d="M66 36C66.7 41.2 69.8 44.3 75 45C69.8 45.7 66.7 48.8 66 54C65.3 48.8 62.2 45.7 57 45C62.2 44.3 65.3 41.2 66 36Z" fill="url(#orangeSpark)"/>
+
+  <!-- 铅笔主体层分别绘制暖色和冷色轮廓，以还原环绕式彩虹渐变。 -->
+  <g stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 暖色轮廓从笔尖沿左侧延伸至圆角笔帽。 -->
+    <path d="M64.5 83.5L68 68L96.5 39.5C98.7 37.3 102.2 37.3 104.5 39.5L108.7 43.8C111 46.1 111 50 108.7 52.3" stroke="url(#pencilWarm)"/>
+    <!-- 冷色轮廓从笔帽沿右侧返回笔尖。 -->
+    <path d="M108.7 52.3L80.5 80.5L64.5 83.5" stroke="url(#pencilCool)"/>
+    <!-- 笔帽分隔线连接笔身两侧轮廓。 -->
+    <path d="M91.7 47.3L101.7 57.3" stroke="url(#pencilBand)"/>
+  </g>
+
+  <!-- 右下闪光层使用略大的蓝色四角星轮廓。 -->
+  <path d="M105 70C105.7 75.1 108.7 78.2 114 79C108.7 79.8 105.7 82.9 105 88C104.3 82.9 101.3 79.8 96 79C101.3 78.2 104.3 75.1 105 70Z" fill="url(#blueSpark)"/>
+</svg>

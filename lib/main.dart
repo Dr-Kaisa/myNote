@@ -103,6 +103,7 @@ class _MyNoteAppState extends State<MyNoteApp> {
           sortMode: appCache.sortMode,
           viewMode: appCache.viewMode,
           isDarkMode: isDarkMode,
+          packageDrawerRailPosition: appCache.packageDrawerRailPosition,
           toolbarActionKeys: appCache.toolbarActionKeys,
         ),
       );
@@ -124,11 +125,12 @@ class _MyNoteAppState extends State<MyNoteApp> {
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
-        systemNavigationBarColor: colors.surface,
-        systemNavigationBarDividerColor: colors.surface,
+        systemNavigationBarColor: colors.surfaceContainerHigh,
+        systemNavigationBarDividerColor: colors.surfaceContainerHigh,
         systemNavigationBarIconBrightness: isDark
             ? Brightness.light
             : Brightness.dark,
+        systemNavigationBarContrastEnforced: false,
       ),
       child: child ?? const SizedBox.shrink(),
     );
