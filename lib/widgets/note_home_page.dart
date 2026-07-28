@@ -4446,6 +4446,119 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
+   * 根据彩色笔图标边界创建多色渐变。
+   */
+  Shader _createColorPenShader(Rect bounds) {
+    return const LinearGradient(
+      // 彩色笔图标渐变色样式
+      colors: <Color>[
+        Color(0xFFFF7043),
+        Color(0xFFFFC107),
+        Color(0xFF4CAF50),
+        Color(0xFF29B6F6),
+        Color(0xFF7E57C2),
+      ],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    ).createShader(bounds);
+  }
+
+  /*
+   * 构建编辑页底部工具栏的单个弹性入口。
+   */
+  Widget _buildEditorBottomToolbarEntry({
+    required Key key,
+    required String tooltip,
+    required Widget icon,
+  }) {
+    return Expanded(
+      child: Center(
+        child: Tooltip(
+          message: tooltip,
+          child: IconButton(
+            key: key,
+            // 当前阶段只提供入口样式，暂不接入具体编辑操作。
+            onPressed: null,
+            // 底部工具栏入口点击区域样式
+            style: IconButton.styleFrom(
+              foregroundColor: _colors.onSurface,
+              disabledForegroundColor: _colors.onSurface,
+              fixedSize: const Size.square(48),
+              padding: EdgeInsets.zero,
+              shape: const CircleBorder(),
+            ),
+            icon: icon,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
+   * 构建会随软键盘上移的编辑页底部工具栏。
+   */
+  Widget _buildEditorBottomToolbar() {
+    return Container(
+      key: const ValueKey<String>('editor-bottom-toolbar'),
+      // 编辑页底部工具栏背景与顶部分隔线样式
+      decoration: BoxDecoration(
+        color: _colors.surfaceContainerHigh,
+        border: Border(top: BorderSide(color: _colors.outlineVariant)),
+      ),
+      child: SizedBox(
+        // 编辑页底部工具栏固定高度样式
+        height: 58,
+        child: Row(
+          // 四个入口使用弹性横向布局，适配不同屏幕宽度。
+          children: <Widget>[
+            _buildEditorBottomToolbarEntry(
+              key: const ValueKey<String>('editor-bottom-toolbar-color'),
+              tooltip: '文字颜色',
+              icon: ShaderMask(
+                shaderCallback: _createColorPenShader,
+                blendMode: BlendMode.srcIn,
+                child: const Icon(
+                  Icons.colorize_rounded,
+                  // 彩色笔图标基础颜色与尺寸样式
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+            _buildEditorBottomToolbarEntry(
+              key: const ValueKey<String>('editor-bottom-toolbar-undo'),
+              tooltip: '撤销',
+              icon: const Icon(
+                Icons.undo_rounded,
+                // 撤销入口图标尺寸样式
+                size: 27,
+              ),
+            ),
+            _buildEditorBottomToolbarEntry(
+              key: const ValueKey<String>('editor-bottom-toolbar-redo'),
+              tooltip: '重做',
+              icon: const Icon(
+                Icons.redo_rounded,
+                // 重做入口图标尺寸样式
+                size: 27,
+              ),
+            ),
+            _buildEditorBottomToolbarEntry(
+              key: const ValueKey<String>('editor-bottom-toolbar-add'),
+              tooltip: '添加',
+              icon: const Icon(
+                Icons.add_circle_outline_rounded,
+                // 添加入口图标尺寸样式
+                size: 28,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /*
    * 构建编辑面板。
    */
   Widget _buildEditorPanel() {
@@ -4536,6 +4649,7 @@ class _NoteHomePageState extends State<NoteHomePage>
                         ),
                 ),
               ),
+              _buildEditorBottomToolbar(),
             ],
           ),
           _buildPackageDrawerRail(),
