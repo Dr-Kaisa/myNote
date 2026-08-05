@@ -3,6 +3,8 @@
   这个文件不是界面代码，而是 Android 系统读取的应用配置。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 正式安装包需要联网读取用户粘贴网址的站点名称。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 11+ 访问 /storage/emulated/0/myNote 需要所有文件访问权限。 -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <!-- Android 12 及以下读取外部存储的兼容权限。 -->

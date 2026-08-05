@@ -11,6 +11,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:html/parser.dart' as html_parser;
+import 'package:markdown/markdown.dart' as markdown;
 import 'package:my_note/models/note_item.dart';
 import 'package:my_note/utils/markdown_helper.dart';
 import 'package:path/path.dart' as path;
@@ -719,6 +721,233 @@ class NoteStorageService {
     return path
         .relative(movedDirectory.path, from: noteDirectory.path)
         .replaceAll('\\', '/');
+  }
+
+  /*
+   * 从 Markdown AST 与原始 HTML 中递归收集本地资源引用。
+   */
+  void _collectMarkdownResourceSources(
+    markdown.Node node,
+    Set<String> resourceSources,
+  ) {
+    if (node is markdown.Element) {
+      if (node.tag == 'pre' || node.tag == 'code') {
+        return;
+      }
+      if (node.tag == 'img' && node.attributes['src'] != null) {
+        resourceSources.add(node.attributes['src']!);
+      } else if (node.tag == 'a' && node.attributes['href'] != null) {
+        resourceSources.add(node.attributes['href']!);
+      }
+
+      for (final markdown.Node child
+          in node.children ?? const <markdown.Node>[]) {
+        _collectMarkdownResourceSources(child, resourceSources);
+      }
+    } else if (node is markdown.Text && node.text.contains('<')) {
+      _collectHtmlResourceSources(node.text, resourceSources);
+    }
+  }
+
+  /*
+   * 从 Markdown AST 中确认过的原始 HTML 片段收集本地资源引用。
+   */
+  void _collectHtmlResourceSources(
+    String htmlText,
+    Set<String> resourceSources,
+  ) {
+    for (final element
+        in html_parser
+            .parseFragment(htmlText)
+            .querySelectorAll('img[src], a[href]')) {
+      final String? source = element.localName == 'img'
+          ? element.attributes['src']
+          : element.attributes['href'];
+      if (source != null) {
+        resourceSources.add(source);
+      }
+    }
+  }
+
+  /*
+   * 将资源引用解析为笔记包 assets 内部的规范化真实路径。
+   */
+  String? _resolvePackageResourcePath(
+    String resourceSource,
+    File documentFile,
+    Directory assetsDirectory,
+  ) {
+    final Uri? resourceUri = Uri.tryParse(resourceSource.trim());
+    if (resourceUri == null ||
+        resourceUri.hasScheme ||
+        resourceUri.hasAuthority ||
+        resourceUri.path.isEmpty) {
+      return null;
+    }
+
+    String decodedPath;
+    try {
+      decodedPath = Uri.decodeComponent(
+        resourceUri.path,
+      ).replaceAll('\\', Platform.pathSeparator);
+    } on FormatException {
+      return null;
+    }
+    decodedPath = decodedPath.replaceAll('/', Platform.pathSeparator);
+    if (path.isAbsolute(decodedPath)) {
+      return null;
+    }
+
+    final String resolvedPath = path.normalize(
+      path.join(documentFile.parent.path, decodedPath),
+    );
+    final String comparableAssetsPath = _getComparableFileSystemPath(
+      assetsDirectory.path,
+    );
+    final String comparableResolvedPath = _getComparableFileSystemPath(
+      resolvedPath,
+    );
+    if (!comparableResolvedPath.startsWith(
+      '$comparableAssetsPath${Platform.pathSeparator}',
+    )) {
+      return null;
+    }
+
+    return comparableResolvedPath;
+  }
+
+  /*
+   * 获取适合当前文件系统进行集合比较的规范化路径。
+   */
+  String _getComparableFileSystemPath(String fileSystemPath) {
+    final String normalizedPath = path.normalize(fileSystemPath);
+    return Platform.isWindows ? normalizedPath.toLowerCase() : normalizedPath;
+  }
+
+  /*
+   * 收集单篇 Markdown 指向笔记包 assets 的全部文件路径。
+   */
+  Set<String> _collectPackageResourcePaths(
+    NoteItem note,
+    File documentFile,
+    Directory assetsDirectory,
+  ) {
+    final Set<String> resourceSources = <String>{};
+    final markdown.Document markdownDocument = markdown.Document(
+      encodeHtml: false,
+      extensionSet: markdown.ExtensionSet.gitHubFlavored,
+    );
+
+    for (final markdown.Node node in markdownDocument.parse(note.content)) {
+      _collectMarkdownResourceSources(node, resourceSources);
+    }
+
+    return resourceSources
+        .map(
+          (String source) => _resolvePackageResourcePath(
+            source,
+            documentFile,
+            assetsDirectory,
+          ),
+        )
+        .whereType<String>()
+        .toSet();
+  }
+
+  /*
+   * 递归删除资源清理后已经为空的 assets 子目录和根目录。
+   */
+  Future<void> _deleteEmptyAssetDirectories(Directory directory) async {
+    if (!await directory.exists()) {
+      return;
+    }
+
+    for (final Directory childDirectory
+        in directory.listSync(followLinks: false).whereType<Directory>()) {
+      await _deleteEmptyAssetDirectories(childDirectory);
+    }
+    if (await directory.list(followLinks: false).isEmpty) {
+      await directory.delete();
+    }
+  }
+
+  /*
+   * 删除笔记包内当前 Markdown，并清理仅由它引用的 assets 资源。
+   *
+   * 删除最后一篇 Markdown 时直接删除整个笔记包，避免留下无法打开的空包。
+   */
+  Future<NoteItem?> deletePackageDocument(String relativePath) async {
+    final Directory noteDirectory = await getNoteDirectory();
+    final File documentFile = await getNoteFileByRelativePath(relativePath);
+    final Directory packageDirectory = documentFile.parent;
+    final Map<String, dynamic>? metadata = await readPackageMetadata(
+      packageDirectory,
+    );
+
+    if (metadata == null || !await documentFile.exists()) {
+      throw Exception('当前 Markdown 不属于有效笔记包');
+    }
+
+    final List<NoteItem> packageNotes = await loadPackageNotesFromDirectory(
+      packageDirectory,
+      noteDirectory,
+    );
+    NoteItem? currentNote;
+    for (final NoteItem note in packageNotes) {
+      if (note.relativePath == relativePath) {
+        currentNote = note;
+        break;
+      }
+    }
+    if (currentNote == null) {
+      throw Exception('当前 Markdown 文件不存在');
+    }
+    if (packageNotes.length == 1) {
+      await packageDirectory.delete(recursive: true);
+      return null;
+    }
+
+    final Directory assetsDirectory = Directory(
+      path.join(packageDirectory.path, packageAssetsDirectoryName),
+    );
+    final Set<String> currentResourcePaths = _collectPackageResourcePaths(
+      currentNote,
+      documentFile,
+      assetsDirectory,
+    );
+    final Set<String> remainingResourcePaths = <String>{};
+    final NoteItem nextEntryNote = packageNotes.firstWhere(
+      (NoteItem note) => note.relativePath != relativePath,
+    );
+
+    for (final NoteItem note in packageNotes) {
+      if (note.relativePath == relativePath) {
+        continue;
+      }
+      remainingResourcePaths.addAll(
+        _collectPackageResourcePaths(
+          note,
+          await getNoteFileByRelativePath(note.relativePath),
+          assetsDirectory,
+        ),
+      );
+    }
+
+    if (metadata['entry'] == currentNote.fileName) {
+      await writePackageMetadata(packageDirectory, nextEntryNote.fileName);
+    }
+    await documentFile.delete();
+
+    for (final String resourcePath in currentResourcePaths.difference(
+      remainingResourcePaths,
+    )) {
+      final File resourceFile = File(resourcePath);
+      if (await resourceFile.exists()) {
+        await resourceFile.delete();
+      }
+    }
+    await _deleteEmptyAssetDirectories(assetsDirectory);
+    return nextEntryNote;
   }
 
   /*

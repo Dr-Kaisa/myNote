@@ -3,10 +3,60 @@
  *
  * 标题、列表和正文会按最终效果显示，Markdown 符号不会直接暴露在编辑界面中。
  */
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:markdown/markdown.dart' as markdown;
 import 'package:markdown_quill/markdown_quill.dart';
+import 'package:my_note/utils/markdown_code_helper.dart';
+import 'package:re_highlight/languages/bash.dart';
+import 'package:re_highlight/languages/c.dart';
+import 'package:re_highlight/languages/cpp.dart';
+import 'package:re_highlight/languages/csharp.dart';
+import 'package:re_highlight/languages/css.dart';
+import 'package:re_highlight/languages/dart.dart';
+import 'package:re_highlight/languages/go.dart';
+import 'package:re_highlight/languages/java.dart';
+import 'package:re_highlight/languages/javascript.dart';
+import 'package:re_highlight/languages/json.dart';
+import 'package:re_highlight/languages/kotlin.dart';
+import 'package:re_highlight/languages/markdown.dart';
+import 'package:re_highlight/languages/python.dart';
+import 'package:re_highlight/languages/rust.dart';
+import 'package:re_highlight/languages/sql.dart';
+import 'package:re_highlight/languages/swift.dart';
+import 'package:re_highlight/languages/typescript.dart';
+import 'package:re_highlight/languages/xml.dart';
+import 'package:re_highlight/languages/yaml.dart';
+import 'package:re_highlight/re_highlight.dart';
+import 'package:re_highlight/styles/github-dark.dart';
+import 'package:re_highlight/styles/github.dart';
+
+/*
+ * Markdown 常见代码语言高亮器，只注册笔记中常用的语言以控制初始化范围。
+ */
+final Highlight _markdownCodeHighlighter = Highlight()
+  ..registerLanguages(<String, Mode>{
+    'bash': langBash,
+    'c': langC,
+    'cpp': langCpp,
+    'csharp': langCsharp,
+    'css': langCss,
+    'dart': langDart,
+    'go': langGo,
+    'java': langJava,
+    'javascript': langJavascript,
+    'json': langJson,
+    'kotlin': langKotlin,
+    'markdown': langMarkdown,
+    'python': langPython,
+    'rust': langRust,
+    'sql': langSql,
+    'swift': langSwift,
+    'typescript': langTypescript,
+    'xml': langXml,
+    'yaml': langYaml,
+  });
 
 /*
  * Markdown 表格嵌入内容渲染组件。
@@ -348,6 +398,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
     required double bottomSpacing,
     required Color color,
     double height = 1.5,
+    BoxDecoration? decoration,
   }) {
     return DefaultTextBlockStyle(
       // 编辑器块级文字样式
@@ -362,8 +413,73 @@ class WysiwygMarkdownEditor extends StatelessWidget {
       HorizontalSpacing.zero,
       VerticalSpacing(topSpacing, bottomSpacing),
       VerticalSpacing.zero,
-      null,
+      decoration,
     );
+  }
+
+  /*
+   * 构建 Markdown 文本片段，并仅在已识别的代码块语言中应用只读语法颜色。
+   *
+   * 高亮颜色只参与界面渲染，不写入 Quill 文档，因而不会污染 Markdown 内容。
+   */
+  InlineSpan _buildMarkdownTextSpan(
+    BuildContext context,
+    Node node,
+    int nodeOffset,
+    String text,
+    TextStyle? style,
+    GestureRecognizer? recognizer,
+  ) {
+    final Line? line = node.parent is Line ? node.parent! as Line : null;
+    final String language = normalizeMarkdownCodeLanguage(
+      line?.style.attributes[markdownCodeBlockLanguageAttributeKey]?.value
+              ?.toString() ??
+          '',
+    );
+    if (language.isEmpty ||
+        _markdownCodeHighlighter.getLanguage(language) == null) {
+      return TextSpan(
+        text: text,
+        style: style,
+        recognizer: recognizer,
+        mouseCursor: recognizer == null ? null : SystemMouseCursors.click,
+      );
+    }
+
+    try {
+      final Map<String, TextStyle> sourceTheme =
+          Theme.of(context).brightness == Brightness.dark
+          ? githubDarkTheme
+          : githubTheme;
+      final TextSpanRenderer renderer = TextSpanRenderer(
+        style,
+        <String, TextStyle>{
+          ...sourceTheme,
+          // 代码块背景由 Quill 块级容器统一绘制，语法主题只负责文字颜色。
+          'root': (sourceTheme['root'] ?? const TextStyle()).copyWith(
+            backgroundColor: Colors.transparent,
+          ),
+        },
+      );
+      _markdownCodeHighlighter
+          .highlight(code: text, language: language)
+          .render(renderer);
+      return renderer.span ??
+          TextSpan(
+            text: text,
+            style: style,
+            recognizer: recognizer,
+            mouseCursor: recognizer == null ? null : SystemMouseCursors.click,
+          );
+    } catch (_) {
+      // 个别异常代码不参与着色，原始代码仍按普通代码块完整展示。
+      return TextSpan(
+        text: text,
+        style: style,
+        recognizer: recognizer,
+        mouseCursor: recognizer == null ? null : SystemMouseCursors.click,
+      );
+    }
   }
 
   /*
@@ -450,6 +566,19 @@ class WysiwygMarkdownEditor extends StatelessWidget {
       ),
       // 编辑器列表样式
       lists: _buildListBlockStyle(colors.onSurface),
+      // 编辑器代码块等宽文字、背景和圆角样式
+      code: _buildTextBlockStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w400,
+        topSpacing: 0,
+        bottomSpacing: 0,
+        color: colors.onSurface,
+        height: 1.55,
+        decoration: BoxDecoration(
+          color: colors.surfaceContainer,
+          borderRadius: BorderRadius.circular(6),
+        ),
+      ),
       // 列表圆点和数字样式，与列表正文保持相同基线
       leading: _buildTextBlockStyle(
         fontSize: 17,
@@ -463,8 +592,13 @@ class WysiwygMarkdownEditor extends StatelessWidget {
       bold: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0),
       // 编辑器链接文字样式
       link: TextStyle(
-        color: colors.primary,
+        color: colors.brightness == Brightness.dark
+            ? const Color(0xFF79B8FF)
+            : const Color(0xFF0969DA),
         decoration: TextDecoration.underline,
+        decorationColor: colors.brightness == Brightness.dark
+            ? const Color(0xFF79B8FF)
+            : const Color(0xFF0969DA),
         letterSpacing: 0,
       ),
       // 编辑器占位文字样式
@@ -538,6 +672,8 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         embedBuilders: const <EmbedBuilder>[_MarkdownTableEmbedBuilder()],
         // 未配置专用组件的旧 Markdown 内容使用安全回退展示。
         unknownEmbedBuilder: const _MarkdownEmbedFallbackBuilder(),
+        // 代码语法颜色仅在文本绘制时生成，不写入 Markdown 文档。
+        textSpanBuilder: _buildMarkdownTextSpan,
       ),
     );
   }

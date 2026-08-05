@@ -12,14 +12,19 @@
  * Padding 是外边距，Expanded 是把剩余空间分给某个子组件。
  */
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:my_note/controllers/markdown_editor_controller.dart';
 import 'package:my_note/models/note_item.dart';
 import 'package:my_note/services/app_cache_service.dart';
+import 'package:my_note/services/note_share_service.dart';
 import 'package:my_note/services/note_storage_service.dart';
+import 'package:my_note/theme/app_theme.dart';
 import 'package:my_note/utils/markdown_helper.dart';
 import 'package:my_note/widgets/markdown_toolbar.dart';
 import 'package:my_note/widgets/wysiwyg_markdown_editor.dart';
@@ -82,6 +87,16 @@ enum NoteSortMode { name, createdAt, updatedAt }
  * 宫格模式用于卡片瀑布流；列表模式用于更紧凑地浏览笔记和文件夹。
  */
 enum NoteViewMode { grid, list }
+
+/*
+ * 编辑页右上角操作菜单类型。
+ */
+enum EditorActionMenuType { more, share }
+
+/*
+ * 编辑器分享内容渲染模式。
+ */
+enum EditorShareRenderMode { none, image, pdf }
 
 /*
  * 首页网格项数据模型。
@@ -330,6 +345,11 @@ class _NoteHomePageState extends State<NoteHomePage>
   final NoteStorageService _noteStorageService = NoteStorageService();
 
   /*
+   * 笔记系统分享服务实例。
+   */
+  final NoteShareService _noteShareService = NoteShareService();
+
+  /*
    * 应用缓存服务实例。
    */
   final AppCacheService _appCacheService = AppCacheService();
@@ -355,6 +375,21 @@ class _NoteHomePageState extends State<NoteHomePage>
   final GlobalKey _moreMenuButtonKey = GlobalKey();
 
   /*
+   * 编辑页分享菜单按钮定位标识。
+   */
+  final GlobalKey _editorShareButtonKey = GlobalKey();
+
+  /*
+   * 编辑页更多菜单按钮定位标识。
+   */
+  final GlobalKey _editorMoreMenuButtonKey = GlobalKey();
+
+  /*
+   * 编辑器分页分享截图定位标识。
+   */
+  final GlobalKey _editorShareCaptureKey = GlobalKey();
+
+  /*
    * 首页面板定位标识。
    */
   final GlobalKey _homePanelKey = GlobalKey();
@@ -370,9 +405,19 @@ class _NoteHomePageState extends State<NoteHomePage>
   OverlayEntry? _moreMenuOverlayEntry;
 
   /*
+   * 当前编辑页操作菜单浮层。
+   */
+  OverlayEntry? _editorActionMenuOverlayEntry;
+
+  /*
    * 更多菜单是否正在执行关闭动画。
    */
   bool _isMoreMenuClosing = false;
+
+  /*
+   * 编辑页操作菜单是否正在执行关闭动画。
+   */
+  bool _isEditorActionMenuClosing = false;
 
   /*
    * 当前全部笔记包入口文档列表。
@@ -516,6 +561,16 @@ class _NoteHomePageState extends State<NoteHomePage>
   bool _isLoading = true;
 
   /*
+   * 是否正在生成或提交系统分享内容。
+   */
+  bool _isShareOperationInProgress = false;
+
+  /*
+   * 当前编辑器分享内容渲染模式。
+   */
+  EditorShareRenderMode _editorShareRenderMode = EditorShareRenderMode.none;
+
+  /*
    * 延迟保存定时器。
    */
   Timer? _saveTimer;
@@ -576,6 +631,7 @@ class _NoteHomePageState extends State<NoteHomePage>
     }
     WidgetsBinding.instance.removeObserver(this);
     _hideMoreMenu(animate: false);
+    _hideEditorActionMenu(animate: false);
     _editorController.removeListener(_handleEditorTextChanged);
     _editorController.dispose();
     _editorFocusNode.dispose();
@@ -1068,6 +1124,305 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
+   * 隐藏编辑页右上角操作菜单。
+   */
+  void _hideEditorActionMenu({bool animate = true, VoidCallback? onHidden}) {
+    final OverlayEntry? overlayEntry = _editorActionMenuOverlayEntry;
+    if (overlayEntry == null) {
+      onHidden?.call();
+      return;
+    }
+    if (!animate) {
+      overlayEntry.remove();
+      _editorActionMenuOverlayEntry = null;
+      _isEditorActionMenuClosing = false;
+      onHidden?.call();
+      return;
+    }
+    if (_isEditorActionMenuClosing) {
+      return;
+    }
+
+    _isEditorActionMenuClosing = true;
+    overlayEntry.markNeedsBuild();
+    Future<void>.delayed(const Duration(milliseconds: 160), () {
+      if (_editorActionMenuOverlayEntry != overlayEntry) {
+        return;
+      }
+      overlayEntry.remove();
+      _editorActionMenuOverlayEntry = null;
+      _isEditorActionMenuClosing = false;
+      onHidden?.call();
+    });
+  }
+
+  /*
+   * 展示编辑页右上角操作菜单。
+   */
+  void _showEditorActionMenu(EditorActionMenuType menuType) {
+    if (_editorActionMenuOverlayEntry != null) {
+      _hideEditorActionMenu();
+      return;
+    }
+
+    final GlobalKey buttonKey = menuType == EditorActionMenuType.share
+        ? _editorShareButtonKey
+        : _editorMoreMenuButtonKey;
+    final BuildContext? buttonContext = buttonKey.currentContext;
+    if (buttonContext == null) {
+      return;
+    }
+
+    final RenderBox buttonBox = buttonContext.findRenderObject() as RenderBox;
+    final Offset buttonOffset = buttonBox.localToGlobal(Offset.zero);
+    final Size screenSize = MediaQuery.of(context).size;
+    final double requestedWidth = menuType == EditorActionMenuType.share
+        ? 268
+        : 224;
+    final double menuHeight = menuType == EditorActionMenuType.share
+        ? 52 * 4
+        : 52 * 4 + 1;
+    final double menuWidth = screenSize.width < requestedWidth + 24
+        ? screenSize.width - 24
+        : requestedWidth;
+    final double menuLeft = (buttonOffset.dx + buttonBox.size.width - menuWidth)
+        .clamp(12.0, screenSize.width - menuWidth - 12.0)
+        .toDouble();
+    final double maximumMenuTop = screenSize.height > menuHeight + 24
+        ? screenSize.height - menuHeight - 12
+        : 12;
+    final double menuTop = (buttonOffset.dy + buttonBox.size.height + 4)
+        .clamp(12.0, maximumMenuTop)
+        .toDouble();
+
+    _isEditorActionMenuClosing = false;
+    _editorActionMenuOverlayEntry = OverlayEntry(
+      builder: (BuildContext overlayContext) {
+        return _buildEditorActionMenuOverlay(
+          left: menuLeft,
+          top: menuTop,
+          width: menuWidth,
+          menuType: menuType,
+        );
+      },
+    );
+    Overlay.of(context).insert(_editorActionMenuOverlayEntry!);
+  }
+
+  /*
+   * 处理编辑页操作菜单选项点击。
+   */
+  void _handleEditorActionMenuSelected(String value) {
+    _hideEditorActionMenu(
+      onHidden: () {
+        if (value == 'settings') {
+          _openSettingsPage();
+        } else if (value == 'move') {
+          unawaited(_showActivePackageMoveSheet());
+        } else if (value == 'delete') {
+          unawaited(_handleDeleteCurrentDocument());
+        } else if (value == 'deleteAll') {
+          unawaited(_handleDeleteCurrentPackage());
+        } else if (value == 'shareText') {
+          unawaited(
+            _shareActiveNote(
+              (NoteItem note, Rect? origin) =>
+                  _noteShareService.shareMarkdownText(note, origin),
+            ),
+          );
+        } else if (value == 'shareFiles') {
+          unawaited(
+            _shareActiveNote(
+              (NoteItem note, Rect? origin) =>
+                  _noteShareService.sharePackageFiles(note, origin),
+            ),
+          );
+        } else if (value == 'shareImage') {
+          unawaited(
+            _shareActiveNote(
+              (NoteItem note, Rect? origin) => _noteShareService.shareAsImages(
+                note,
+                (onPage) => _captureActiveEditorPages(
+                  onPage,
+                  renderMode: EditorShareRenderMode.image,
+                ),
+                origin,
+              ),
+            ),
+          );
+        } else if (value == 'sharePdf') {
+          unawaited(
+            _shareActiveNote(
+              (NoteItem note, Rect? origin) => _noteShareService.shareAsPdf(
+                note,
+                (onPage) => _captureActiveEditorPages(
+                  onPage,
+                  renderMode: EditorShareRenderMode.pdf,
+                ),
+                origin,
+              ),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  /*
+   * 构建编辑页操作菜单浮层。
+   */
+  Widget _buildEditorActionMenuOverlay({
+    required double left,
+    required double top,
+    required double width,
+    required EditorActionMenuType menuType,
+  }) {
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerUp: (_) {
+              _hideEditorActionMenu();
+            },
+            onPointerCancel: (_) {
+              _hideEditorActionMenu();
+            },
+            child: TweenAnimationBuilder<double>(
+              duration: Duration(
+                milliseconds: _isEditorActionMenuClosing ? 160 : 180,
+              ),
+              curve: _isEditorActionMenuClosing
+                  ? Curves.easeInCubic
+                  : Curves.easeOutCubic,
+              tween: Tween<double>(
+                begin: _isEditorActionMenuClosing ? 1 : 0,
+                end: _isEditorActionMenuClosing ? 0 : 1,
+              ),
+              builder: (BuildContext context, double value, Widget? child) {
+                return Opacity(opacity: value, child: child);
+              },
+              child: Container(
+                // 编辑页操作菜单外部遮罩背景样式
+                color: _colors.scrim.withValues(alpha: 0.2),
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: width,
+          child: TweenAnimationBuilder<double>(
+            duration: Duration(
+              milliseconds: _isEditorActionMenuClosing ? 160 : 180,
+            ),
+            curve: _isEditorActionMenuClosing
+                ? Curves.easeInCubic
+                : Curves.easeOutCubic,
+            tween: Tween<double>(
+              begin: _isEditorActionMenuClosing ? 1 : 0.72,
+              end: _isEditorActionMenuClosing ? 0.72 : 1,
+            ),
+            child: _buildEditorActionMenuPanel(menuType),
+            builder: (BuildContext context, double value, Widget? child) {
+              return Opacity(
+                opacity: ((value - 0.72) / 0.28).clamp(0.0, 1.0).toDouble(),
+                child: Transform.scale(
+                  scale: value,
+                  alignment: Alignment.topRight,
+                  child: child,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /*
+   * 构建编辑页操作菜单面板。
+   */
+  Widget _buildEditorActionMenuPanel(EditorActionMenuType menuType) {
+    final List<Widget> menuItems = menuType == EditorActionMenuType.more
+        ? <Widget>[
+            _buildEditorActionMenuItem(label: '设置', value: 'settings'),
+            Divider(height: 1, color: _colors.outlineVariant),
+            _buildEditorActionMenuItem(label: '移动', value: 'move'),
+            _buildEditorActionMenuItem(
+              label: '删除',
+              value: 'delete',
+              isDestructive: true,
+            ),
+            _buildEditorActionMenuItem(
+              label: '删除全部',
+              value: 'deleteAll',
+              isDestructive: true,
+            ),
+          ]
+        : <Widget>[
+            _buildEditorActionMenuItem(label: '以文本形式分享', value: 'shareText'),
+            _buildEditorActionMenuItem(
+              label: '以文件形式分享（含引用）',
+              value: 'shareFiles',
+            ),
+            _buildEditorActionMenuItem(label: '以图片分享', value: 'shareImage'),
+            _buildEditorActionMenuItem(label: '以 PDF 分享', value: 'sharePdf'),
+          ];
+
+    return Material(
+      // 编辑页操作菜单面板材质样式
+      color: _colors.surfaceContainerLowest,
+      elevation: 18,
+      shadowColor: _colors.shadow.withValues(alpha: 0.2),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        // 编辑页操作菜单选项纵向布局样式
+        mainAxisSize: MainAxisSize.min,
+        children: menuItems,
+      ),
+    );
+  }
+
+  /*
+   * 构建编辑页操作菜单单个选项。
+   */
+  Widget _buildEditorActionMenuItem({
+    required String label,
+    required String value,
+    bool isDestructive = false,
+  }) {
+    return InkWell(
+      onTap: () {
+        _handleEditorActionMenuSelected(value);
+      },
+      child: SizedBox(
+        height: 52,
+        child: Padding(
+          // 编辑页操作菜单选项内容边距样式
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              // 编辑页操作菜单选项文字样式
+              style: TextStyle(
+                color: isDestructive ? _colors.error : _colors.onSurface,
+                fontSize: 16,
+                fontWeight: isDestructive ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
    * 获取首页分类集合。
    */
   List<NoteCategoryItem> _buildCategories() {
@@ -1236,6 +1591,342 @@ class _NoteHomePageState extends State<NoteHomePage>
         },
       ),
     );
+  }
+
+  /*
+   * 获取分享按钮在全局坐标中的矩形区域。
+   */
+  Rect? _getEditorShareOrigin() {
+    final BuildContext? buttonContext = _editorShareButtonKey.currentContext;
+    final RenderObject? renderObject = buttonContext?.findRenderObject();
+    if (renderObject is! RenderBox) {
+      return null;
+    }
+
+    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+  }
+
+  /*
+   * 将编辑器单次可见区域整理为固定尺寸的 PNG 分页。
+   */
+  Future<Uint8List> _encodeEditorCapturePage({
+    required ui.Image capturedImage,
+    required double sourceTop,
+    required double visibleHeight,
+    required Color backgroundColor,
+  }) async {
+    final double boundedSourceTop = sourceTop
+        .clamp(0.0, capturedImage.height - 1.0)
+        .toDouble();
+    final double boundedVisibleHeight = visibleHeight
+        .clamp(1.0, capturedImage.height - boundedSourceTop)
+        .toDouble();
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(recorder);
+
+    // 分享截图页面背景样式
+    canvas.drawColor(backgroundColor, ui.BlendMode.src);
+    canvas.drawImageRect(
+      capturedImage,
+      ui.Rect.fromLTWH(
+        0,
+        boundedSourceTop,
+        capturedImage.width.toDouble(),
+        boundedVisibleHeight,
+      ),
+      ui.Rect.fromLTWH(
+        0,
+        0,
+        capturedImage.width.toDouble(),
+        boundedVisibleHeight,
+      ),
+      ui.Paint(),
+    );
+
+    final ui.Picture picture = recorder.endRecording();
+    final ui.Image pageImage = await picture.toImage(
+      capturedImage.width,
+      capturedImage.height,
+    );
+    picture.dispose();
+
+    try {
+      final ByteData? imageData = await pageImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      if (imageData == null) {
+        throw Exception('分享图片生成失败');
+      }
+      return imageData.buffer.asUint8List(
+        imageData.offsetInBytes,
+        imageData.lengthInBytes,
+      );
+    } finally {
+      pageImage.dispose();
+    }
+  }
+
+  /*
+   * 更新分享截图使用的临时选区，同时阻止 Quill 重新请求焦点或滚动光标。
+   */
+  void _updateEditorSelectionForShare(TextSelection selection) {
+    final QuillController controller = _editorController.quillController;
+    final bool previousIgnoreFocus = controller.ignoreFocusOnTextChange;
+    controller.ignoreFocusOnTextChange = true;
+    try {
+      controller.updateSelection(selection, ChangeSource.local);
+    } finally {
+      controller.ignoreFocusOnTextChange = previousIgnoreFocus;
+    }
+    if (mounted) {
+      setState(() {
+        // 让编辑器使用临时选区重新绘制，截图中不保留用户选择高亮。
+      });
+    }
+  }
+
+  /*
+   * 等待键盘退场后的编辑器尺寸连续两帧保持稳定。
+   */
+  Future<void> _waitForStableEditorShareLayout() async {
+    Size? previousBoundarySize;
+    double? previousViewportHeight;
+    double? previousMaximumOffset;
+    int stableFrameCount = 0;
+
+    for (int frameIndex = 0; frameIndex < 30; frameIndex++) {
+      await WidgetsBinding.instance.endOfFrame;
+      final RenderObject? renderObject = _editorShareCaptureKey.currentContext
+          ?.findRenderObject();
+      if (renderObject is! RenderRepaintBoundary ||
+          !_editorScrollController.hasClients ||
+          !_editorScrollController.position.hasContentDimensions) {
+        stableFrameCount = 0;
+        continue;
+      }
+
+      final Size boundarySize = renderObject.size;
+      final ScrollPosition position = _editorScrollController.position;
+      final bool isStable =
+          previousBoundarySize != null &&
+          (previousBoundarySize.width - boundarySize.width).abs() < 0.5 &&
+          (previousBoundarySize.height - boundarySize.height).abs() < 0.5 &&
+          (previousViewportHeight! - position.viewportDimension).abs() < 0.5 &&
+          (previousMaximumOffset! - position.maxScrollExtent).abs() < 0.5;
+      stableFrameCount = isStable ? stableFrameCount + 1 : 0;
+      previousBoundarySize = boundarySize;
+      previousViewportHeight = position.viewportDimension;
+      previousMaximumOffset = position.maxScrollExtent;
+      if (stableFrameCount >= 2) {
+        return;
+      }
+    }
+
+    throw Exception('编辑器布局尚未稳定，暂时无法生成分享图片');
+  }
+
+  /*
+   * 按当前编辑器视口逐页截取真实排版，并在完成后恢复原滚动位置。
+   */
+  Future<void> _captureActiveEditorPages(
+    Future<void> Function(Uint8List pageBytes, double visibleFraction) onPage, {
+    required EditorShareRenderMode renderMode,
+  }) async {
+    final double pixelRatio = MediaQuery.devicePixelRatioOf(
+      context,
+    ).clamp(1.5, 2.0).toDouble();
+    final Color pageBackgroundColor = renderMode == EditorShareRenderMode.pdf
+        ? Colors.transparent
+        : _colors.surfaceContainerLow;
+    final TextSelection originalSelection =
+        _editorController.quillController.selection;
+    final double? requestedRestoreOffset = _editorScrollController.hasClients
+        ? _editorScrollController.position.pixels
+        : null;
+    final bool shouldRestoreSelection =
+        originalSelection.isValid && !originalSelection.isCollapsed;
+    final EditorShareRenderMode previousRenderMode = _editorShareRenderMode;
+    double? originalOffset;
+
+    if (previousRenderMode != renderMode) {
+      setState(() {
+        _editorShareRenderMode = renderMode;
+      });
+    }
+    try {
+      if (_isToolbarCustomizing) {
+        _toolbarCustomizationController.closeCustomization();
+      }
+      if (shouldRestoreSelection) {
+        _updateEditorSelectionForShare(
+          TextSelection.collapsed(offset: originalSelection.extentOffset),
+        );
+      }
+      await _waitForStableEditorShareLayout();
+      final RenderObject? initialRenderObject = _editorShareCaptureKey
+          .currentContext
+          ?.findRenderObject();
+      if (initialRenderObject is! RenderRepaintBoundary ||
+          !_editorScrollController.hasClients) {
+        throw Exception('编辑器尚未准备好，暂时无法生成分享图片');
+      }
+
+      final ScrollPosition initialPosition = _editorScrollController.position;
+      final Size captureBoundarySize = initialRenderObject.size;
+      final double viewportHeight = initialPosition.viewportDimension;
+      if (viewportHeight <= 0) {
+        throw Exception('编辑器可见区域尺寸无效');
+      }
+
+      originalOffset = (requestedRestoreOffset ?? initialPosition.pixels)
+          .clamp(
+            initialPosition.minScrollExtent,
+            initialPosition.maxScrollExtent,
+          )
+          .toDouble();
+      final double contentHeight =
+          initialPosition.maxScrollExtent + viewportHeight;
+      final double maximumOffset = initialPosition.maxScrollExtent;
+      final double paginatedContentHeight = contentHeight > 0.5
+          ? contentHeight - 0.5
+          : contentHeight;
+      final int pageCount = (paginatedContentHeight / viewportHeight).ceil();
+
+      for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+        if (!_editorScrollController.hasClients) {
+          throw Exception('编辑器已关闭，分享内容生成已停止');
+        }
+
+        final ScrollPosition currentPosition = _editorScrollController.position;
+        final double requestedOffset = pageIndex * viewportHeight;
+        final double actualOffset = requestedOffset
+            .clamp(
+              currentPosition.minScrollExtent,
+              currentPosition.maxScrollExtent,
+            )
+            .toDouble();
+        if ((currentPosition.pixels - actualOffset).abs() > 0.01) {
+          _editorScrollController.jumpTo(actualOffset);
+        }
+        await WidgetsBinding.instance.endOfFrame;
+
+        final RenderObject? renderObject = _editorShareCaptureKey.currentContext
+            ?.findRenderObject();
+        if (renderObject is! RenderRepaintBoundary) {
+          throw Exception('编辑器分享截图区域不可用');
+        }
+        final ScrollPosition capturePosition = _editorScrollController.position;
+        if ((renderObject.size.width - captureBoundarySize.width).abs() >=
+                0.5 ||
+            (renderObject.size.height - captureBoundarySize.height).abs() >=
+                0.5 ||
+            (capturePosition.viewportDimension - viewportHeight).abs() >= 0.5 ||
+            (capturePosition.maxScrollExtent - maximumOffset).abs() >= 0.5) {
+          throw Exception('编辑器尺寸发生变化，请稍后重试分享');
+        }
+
+        final ui.Image capturedImage = await renderObject.toImage(
+          pixelRatio: pixelRatio,
+        );
+        try {
+          final double remainingHeight = contentHeight - requestedOffset;
+          final double visibleHeight = remainingHeight < viewportHeight
+              ? remainingHeight
+              : viewportHeight;
+          await onPage(
+            await _encodeEditorCapturePage(
+              capturedImage: capturedImage,
+              sourceTop: (requestedOffset - actualOffset) * pixelRatio,
+              visibleHeight: visibleHeight * pixelRatio,
+              backgroundColor: pageBackgroundColor,
+            ),
+            (visibleHeight / viewportHeight).clamp(0.0, 1.0).toDouble(),
+          );
+        } finally {
+          capturedImage.dispose();
+        }
+      }
+    } finally {
+      if (mounted && _editorShareRenderMode != previousRenderMode) {
+        setState(() {
+          _editorShareRenderMode = previousRenderMode;
+        });
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      if (mounted && shouldRestoreSelection) {
+        _updateEditorSelectionForShare(originalSelection);
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      if (mounted &&
+          originalOffset != null &&
+          _editorScrollController.hasClients) {
+        final ScrollPosition currentPosition = _editorScrollController.position;
+        final double restoredOffset = originalOffset
+            .clamp(
+              currentPosition.minScrollExtent,
+              currentPosition.maxScrollExtent,
+            )
+            .toDouble();
+        if ((currentPosition.pixels - restoredOffset).abs() > 0.01) {
+          _editorScrollController.jumpTo(restoredOffset);
+          await WidgetsBinding.instance.endOfFrame;
+        }
+      }
+    }
+  }
+
+  /*
+   * 保存当前文档后执行指定系统分享操作。
+   */
+  Future<void> _shareActiveNote(
+    Future<void> Function(NoteItem note, Rect? origin) shareAction,
+  ) async {
+    if (_activeNote == null || _isShareOperationInProgress) {
+      return;
+    }
+
+    final Rect? shareOrigin = _getEditorShareOrigin();
+    final Color progressBackgroundColor = _colors.surface;
+    final Color progressIndicatorColor = _colors.primary;
+    final OverlayEntry progressOverlay = OverlayEntry(
+      builder: (BuildContext overlayContext) {
+        return Positioned.fill(
+          child: AbsorbPointer(
+            child: ColoredBox(
+              // 分享内容生成期间的遮罩背景样式
+              color: progressBackgroundColor,
+              child: Center(
+                child: CircularProgressIndicator(
+                  // 分享内容生成进度指示器样式
+                  color: progressIndicatorColor,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    setState(() {
+      _isShareOperationInProgress = true;
+    });
+    _setEditorInteractionLocked(true);
+    Overlay.of(context).insert(progressOverlay);
+    try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
+      await shareAction(_activeNote!, shareOrigin);
+    } catch (error) {
+      await _showMessageDialog('分享失败', error.toString());
+    } finally {
+      progressOverlay.remove();
+      _setEditorInteractionLocked(false);
+      if (mounted) {
+        setState(() {
+          _isShareOperationInProgress = false;
+        });
+      }
+    }
   }
 
   /*
@@ -1774,7 +2465,9 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 判断系统返回键是否需要由当前页面处理。
    */
   bool _canHandleSystemBack({required bool isWideLayout}) {
-    return _isPackageDrawerOpen ||
+    return _isShareOperationInProgress ||
+        _editorActionMenuOverlayEntry != null ||
+        _isPackageDrawerOpen ||
         _isToolbarCustomizing ||
         _isSelectionMode ||
         (!isWideLayout && !_isCompactBrowserVisible) ||
@@ -1785,6 +2478,15 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 处理系统返回键操作。
    */
   void _handleSystemBack({required bool isWideLayout}) {
+    if (_isShareOperationInProgress) {
+      return;
+    }
+
+    if (_editorActionMenuOverlayEntry != null) {
+      _hideEditorActionMenu();
+      return;
+    }
+
     if (_isPackageDrawerOpen) {
       setState(() {
         _isPackageDrawerOpen = false;
@@ -1822,6 +2524,11 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 处理详情页左上角返回按钮，优先退出工具栏自定义模式。
    */
   void _handleEditorBackButton() {
+    if (_editorActionMenuOverlayEntry != null) {
+      _hideEditorActionMenu();
+      return;
+    }
+
     if (_isPackageDrawerOpen) {
       setState(() {
         _isPackageDrawerOpen = false;
@@ -1964,20 +2671,43 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
-   * 删除当前打开的整个笔记包。
+   * 删除当前 Markdown，并在它是最后一篇时删除整个笔记包。
    */
-  Future<void> _handleDeleteNote({required bool isWideLayout}) async {
+  Future<void> _handleDeleteCurrentDocument() async {
     if (_activeNote == null) {
       return;
     }
 
+    late final NoteItem requestedNote;
+    bool hasMultipleDocuments;
+    _setEditorInteractionLocked(true);
+    try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
+      requestedNote = _activeNote!;
+      hasMultipleDocuments =
+          (await _loadPackageNotes(requestedNote)).length > 1;
+    } catch (error) {
+      if (mounted) {
+        await _showMessageDialog('读取笔记包失败', error.toString());
+      }
+      return;
+    } finally {
+      _setEditorInteractionLocked(false);
+    }
+    if (!mounted) {
+      return;
+    }
     final bool? shouldDelete = await showDialog<bool>(
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          title: const Text('删除笔记包'),
+          title: const Text('删除当前文档'),
           content: Text(
-            '确定删除「${_activeNote!.packageName}」及其中全部 Markdown 和 assets 吗？',
+            hasMultipleDocuments
+                ? '确定删除「${requestedNote.fileName}」及仅由它引用的资源吗？'
+                : '这是笔记包内最后一篇 Markdown，删除后整个笔记包及其资源都会被删除。',
           ),
           actions: <Widget>[
             TextButton(
@@ -1990,6 +2720,8 @@ class _NoteHomePageState extends State<NoteHomePage>
               onPressed: () {
                 Navigator.of(dialogContext).pop(true);
               },
+              // 删除确认按钮文字样式
+              style: TextButton.styleFrom(foregroundColor: _colors.error),
               child: const Text('删除'),
             ),
           ],
@@ -1997,16 +2729,19 @@ class _NoteHomePageState extends State<NoteHomePage>
       },
     );
 
-    if (shouldDelete != true) {
+    if (shouldDelete != true ||
+        _activeNote?.relativePath != requestedNote.relativePath) {
       return;
     }
 
     _setEditorInteractionLocked(true);
     try {
-      _saveTimer?.cancel();
-      _saveTimer = null;
-      await _saveQueue;
-      await _noteStorageService.deleteNote(_activeNote!.relativePath);
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
+      final String deletedRelativePath = _activeNote!.relativePath;
+      await _noteStorageService.deletePackageDocument(deletedRelativePath);
+      _documentScrollOffsets.remove(deletedRelativePath);
       await _reloadNotes(flushEditor: false);
 
       if (!mounted) {
@@ -2019,7 +2754,96 @@ class _NoteHomePageState extends State<NoteHomePage>
         }
       });
     } catch (error) {
+      if (mounted) {
+        try {
+          await _reloadNotes(flushEditor: false);
+        } catch (_) {
+          // 删除已部分完成时优先尝试刷新界面，二次读取失败仍由原始错误提示说明。
+        }
+      }
       await _showMessageDialog('删除失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
+    }
+  }
+
+  /*
+   * 删除当前 Markdown 所属的整个笔记包及其中全部资源。
+   */
+  Future<void> _handleDeleteCurrentPackage() async {
+    if (_activeNote == null) {
+      return;
+    }
+
+    final NoteItem requestedNote = _activeNote!;
+    final bool? shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('删除整个笔记包'),
+          content: Text(
+            '确定删除「${requestedNote.packageName}」中的全部 Markdown 和 assets 吗？',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              // 删除全部确认按钮文字样式
+              style: TextButton.styleFrom(foregroundColor: _colors.error),
+              child: const Text('删除全部'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true ||
+        _activeNote?.packageRelativePath != requestedNote.packageRelativePath) {
+      return;
+    }
+
+    _setEditorInteractionLocked(true);
+    try {
+      _saveTimer?.cancel();
+      _saveTimer = null;
+      await _saveQueue;
+      if (_activeNote?.packageRelativePath !=
+          requestedNote.packageRelativePath) {
+        return;
+      }
+
+      await _noteStorageService.deleteNote(_activeNote!.relativePath);
+      _documentScrollOffsets.removeWhere(
+        (String relativePath, double _) =>
+            relativePath.startsWith('${requestedNote.packageRelativePath}/'),
+      );
+      await _reloadNotes(flushEditor: false);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        if (_notes.isEmpty) {
+          _isCompactBrowserVisible = true;
+        }
+      });
+    } catch (error) {
+      if (mounted) {
+        try {
+          await _reloadNotes(flushEditor: false);
+        } catch (_) {
+          // 整包删除已部分完成时优先刷新界面，二次读取失败仍保留原始错误。
+        }
+        await _showMessageDialog('删除失败', error.toString());
+      }
     } finally {
       _setEditorInteractionLocked(false);
     }
@@ -2692,10 +3516,69 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
+   * 将当前笔记包移动到指定普通文件夹并继续打开当前文档。
+   */
+  Future<void> _moveActivePackageToDirectory(String targetDirectoryPath) async {
+    if (_activeNote == null ||
+        _activeNote!.directoryPath == targetDirectoryPath) {
+      return;
+    }
+
+    _setEditorInteractionLocked(true);
+    try {
+      if (!await _flushPendingEditorSave()) {
+        return;
+      }
+      final NoteItem movedEntry = await _noteStorageService.moveNoteToDirectory(
+        _activeNote!,
+        targetDirectoryPath,
+      );
+      final List<NoteItem> movedPackageNotes = await _loadPackageNotes(
+        movedEntry,
+      );
+      await _reloadNotes(flushEditor: false);
+
+      if (!mounted) {
+        return;
+      }
+
+      _activateNote(
+        _findPackageNoteByRelativePath(
+              movedPackageNotes,
+              movedEntry.relativePath,
+            ) ??
+            movedEntry,
+        isWideLayout: MediaQuery.of(context).size.width >= 980,
+        packageNotes: movedPackageNotes,
+      );
+      setState(() {
+        _activeCategoryId = 'all';
+        _activeDirectoryPath = targetDirectoryPath;
+        _increaseFolderVisitCount(targetDirectoryPath);
+      });
+    } catch (error) {
+      await _showMessageDialog('移动失败', error.toString());
+    } finally {
+      _setEditorInteractionLocked(false);
+    }
+  }
+
+  /*
+   * 为当前笔记包打开与首页相同的移动文件夹面板。
+   */
+  Future<void> _showActivePackageMoveSheet() async {
+    if (_activeNote == null) {
+      return;
+    }
+
+    await _showMoveSheet(packageToMove: _activeNote);
+  }
+
+  /*
    * 展示移动目标文件夹面板。
    */
-  Future<void> _showMoveSheet() async {
-    if (_selectedItemIds.isEmpty) {
+  Future<void> _showMoveSheet({NoteItem? packageToMove}) async {
+    if (packageToMove == null && _selectedItemIds.isEmpty) {
       return;
     }
 
@@ -2704,7 +3587,7 @@ class _NoteHomePageState extends State<NoteHomePage>
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (BuildContext sheetContext) {
-        return _buildMoveSheet(sheetContext);
+        return _buildMoveSheet(sheetContext, packageToMove: packageToMove);
       },
     );
   }
@@ -2857,6 +3740,11 @@ class _NoteHomePageState extends State<NoteHomePage>
       return;
     }
 
+    if (actionKey == ToolbarActionKey.codeBlock) {
+      unawaited(_insertMarkdownCodeBlock());
+      return;
+    }
+
     _toggleEditorAttribute(switch (actionKey) {
       ToolbarActionKey.title => Attribute.h1,
       ToolbarActionKey.subtitle => Attribute.h2,
@@ -2871,12 +3759,80 @@ class _NoteHomePageState extends State<NoteHomePage>
       ToolbarActionKey.orderedList => Attribute.ol,
       ToolbarActionKey.checkList => Attribute.unchecked,
       ToolbarActionKey.blockQuote => Attribute.blockQuote,
-      ToolbarActionKey.codeBlock => Attribute.codeBlock,
       ToolbarActionKey.inlineCode => Attribute.inlineCode,
+      ToolbarActionKey.codeBlock ||
       ToolbarActionKey.insertTable ||
       ToolbarActionKey.undo ||
       ToolbarActionKey.redo => throw StateError('命令工具已在格式切换前处理'),
     });
+  }
+
+  /*
+   * 弹出代码块语言输入对话框。
+   *
+   * 返回 null 表示取消，返回空字符串表示创建不带语言标识的普通代码块。
+   */
+  Future<String?> _showCodeBlockLanguageDialog() async {
+    final TextEditingController languageController = TextEditingController();
+    final DialogRoute<String> languageDialogRoute = DialogRoute<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('代码块语言'),
+          content: TextField(
+            controller: languageController,
+            autofocus: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            textInputAction: TextInputAction.done,
+            // 代码块语言输入框提示样式
+            decoration: const InputDecoration(hintText: '例如 java，可留空'),
+            onSubmitted: (String value) {
+              Navigator.of(dialogContext).pop(value);
+            },
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(languageController.text);
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        );
+      },
+    );
+
+    try {
+      final String? language = await Navigator.of(
+        context,
+        rootNavigator: true,
+      ).push(languageDialogRoute);
+      // 等待退出动画结束，确保 TextField 已从组件树卸载后再释放输入控制器。
+      await languageDialogRoute.completed;
+      return language;
+    } finally {
+      languageController.dispose();
+    }
+  }
+
+  /*
+   * 根据用户输入的语言标识创建当前 Markdown 代码块。
+   */
+  Future<void> _insertMarkdownCodeBlock() async {
+    final String? language = await _showCodeBlockLanguageDialog();
+    if (language == null || !mounted) {
+      return;
+    }
+
+    _editorController.applyCodeBlock(language);
+    _editorFocusNode.requestFocus();
   }
 
   /*
@@ -4088,9 +5044,13 @@ class _NoteHomePageState extends State<NoteHomePage>
   /*
    * 构建移动目标文件夹面板。
    */
-  Widget _buildMoveSheet(BuildContext sheetContext) {
+  Widget _buildMoveSheet(BuildContext sheetContext, {NoteItem? packageToMove}) {
     final List<String> targetFolders = _folderPaths
-        .where(_canUseMoveTarget)
+        .where(
+          (String folderPath) => packageToMove == null
+              ? _canUseMoveTarget(folderPath)
+              : packageToMove.directoryPath != folderPath,
+        )
         .toList();
     final List<Widget> targetCards = <Widget>[
       _buildMoveTargetCard(
@@ -4099,17 +5059,31 @@ class _NoteHomePageState extends State<NoteHomePage>
         subtitle: '',
         onTap: () async {
           Navigator.of(sheetContext).pop();
-          await _handleCreateFolder(moveSelectedAfterCreate: true);
+          if (packageToMove == null) {
+            await _handleCreateFolder(moveSelectedAfterCreate: true);
+          } else {
+            final String? folderPath = await _handleCreateFolder();
+            if (folderPath != null) {
+              await _moveActivePackageToDirectory(folderPath);
+            }
+          }
         },
       ),
-      if (_canMoveSelectedItemsOut())
+      if (packageToMove?.directoryPath.isNotEmpty ?? _canMoveSelectedItemsOut())
         _buildMoveTargetCard(
           icon: Icons.folder_rounded,
           title: '移出文件夹',
           subtitle: '移动到笔记根目录',
           onTap: () async {
             Navigator.of(sheetContext).pop();
-            await _moveSelectedItemsToDirectory('', keepCurrentDirectory: true);
+            if (packageToMove == null) {
+              await _moveSelectedItemsToDirectory(
+                '',
+                keepCurrentDirectory: true,
+              );
+            } else {
+              await _moveActivePackageToDirectory('');
+            }
           },
         ),
       ...targetFolders.map(
@@ -4119,13 +5093,19 @@ class _NoteHomePageState extends State<NoteHomePage>
           subtitle: '${_getFolderNoteCount(folderPath)}',
           onTap: () async {
             Navigator.of(sheetContext).pop();
-            await _moveSelectedItemsToDirectory(folderPath);
+            if (packageToMove == null) {
+              await _moveSelectedItemsToDirectory(folderPath);
+            } else {
+              await _moveActivePackageToDirectory(folderPath);
+            }
           },
         ),
       ),
     ];
 
     return DraggableScrollableSheet(
+      // 移动面板仅占实际显示高度，让上方遮罩区域可以点击关闭。
+      expand: false,
       initialChildSize: 0.48,
       minChildSize: 0.32,
       maxChildSize: 0.82,
@@ -4650,6 +5630,11 @@ class _NoteHomePageState extends State<NoteHomePage>
       );
     }
 
+    final bool isRenderingShareContent =
+        _editorShareRenderMode != EditorShareRenderMode.none;
+    final bool isRenderingPdf =
+        _editorShareRenderMode == EditorShareRenderMode.pdf;
+
     return Container(
       // 编辑面板容器样式
       color: _colors.surfaceContainerLow,
@@ -4659,7 +5644,7 @@ class _NoteHomePageState extends State<NoteHomePage>
             children: <Widget>[
               Padding(
                 // 编辑面板标题行独立边距样式
-                padding: const EdgeInsets.fromLTRB(0, 14, 22, 0),
+                padding: const EdgeInsets.fromLTRB(0, 14, 4, 0),
                 child: Row(
                   // 编辑面板标题行横向布局样式
                   children: <Widget>[
@@ -4680,12 +5665,25 @@ class _NoteHomePageState extends State<NoteHomePage>
                     ),
                     const Spacer(),
                     IconButton(
-                      tooltip: '删除笔记包',
-                      onPressed: () {
-                        final double width = MediaQuery.of(context).size.width;
-                        _handleDeleteNote(isWideLayout: width >= 980);
-                      },
-                      icon: const Icon(Icons.delete_outline_rounded),
+                      key: _editorShareButtonKey,
+                      tooltip: '分享当前文档',
+                      onPressed: _isShareOperationInProgress
+                          ? null
+                          : () {
+                              _showEditorActionMenu(EditorActionMenuType.share);
+                            },
+                      icon: const Icon(Icons.share_outlined),
+                      color: _colors.onSurface,
+                    ),
+                    IconButton(
+                      key: _editorMoreMenuButtonKey,
+                      tooltip: '更多操作',
+                      onPressed: _isShareOperationInProgress
+                          ? null
+                          : () {
+                              _showEditorActionMenu(EditorActionMenuType.more);
+                            },
+                      icon: const Icon(Icons.more_vert_rounded),
                       color: _colors.onSurface,
                     ),
                   ],
@@ -4701,20 +5699,36 @@ class _NoteHomePageState extends State<NoteHomePage>
                 onCustomizationChanged: _handleToolbarCustomizationChanged,
               ),
               Expanded(
-                child: Padding(
-                  // 编辑器正文独立边距样式，工具栏不继承该横向边距。
-                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
-                  child: _isToolbarCustomizing
-                      ? ColoredBox(
-                          // 工具仓库显示期间正文区域背景样式
-                          color: _colors.surfaceContainerLow,
-                        )
-                      : WysiwygMarkdownEditor(
-                          controller: _editorController.quillController,
-                          focusNode: _editorFocusNode,
-                          scrollController: _editorScrollController,
-                          metadataText: _buildEditorMetadataText(),
-                        ),
+                child: RepaintBoundary(
+                  key: _editorShareCaptureKey,
+                  child: ColoredBox(
+                    // PDF 使用透明截图背景，长图与编辑页继续使用当前主题背景。
+                    color: isRenderingPdf
+                        ? Colors.transparent
+                        : _colors.surfaceContainerLow,
+                    child: Padding(
+                      // 分享成品增加左右留白，普通编辑状态保持原正文边距。
+                      padding: isRenderingShareContent
+                          ? const EdgeInsets.symmetric(horizontal: 32)
+                          : const EdgeInsets.fromLTRB(22, 0, 22, 8),
+                      child: _isToolbarCustomizing
+                          ? ColoredBox(
+                              // 工具仓库显示期间正文区域背景样式
+                              color: _colors.surfaceContainerLow,
+                            )
+                          : Theme(
+                              data: isRenderingPdf
+                                  ? AppTheme.lightTheme
+                                  : Theme.of(context),
+                              child: WysiwygMarkdownEditor(
+                                controller: _editorController.quillController,
+                                focusNode: _editorFocusNode,
+                                scrollController: _editorScrollController,
+                                metadataText: _buildEditorMetadataText(),
+                              ),
+                            ),
+                    ),
+                  ),
                 ),
               ),
               _buildEditorBottomToolbar(),

@@ -1,12 +1,15 @@
 /*
  * 文件说明：Markdown 所见即所得编辑控制器测试文件，验证标题、列表和文本同步行为。
  */
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:markdown_quill/markdown_quill.dart';
 import 'package:my_note/controllers/markdown_editor_controller.dart';
 import 'package:my_note/theme/app_theme.dart';
+import 'package:my_note/utils/markdown_code_helper.dart';
 import 'package:my_note/utils/markdown_helper.dart';
 import 'package:my_note/widgets/markdown_toolbar.dart';
 import 'package:my_note/widgets/wysiwyg_markdown_editor.dart';
@@ -30,6 +33,23 @@ Future<void> dragToolbarAction(
   await gesture.up();
   // 自定义模式会持续播放图标抖动，因此只推进落位和飞回动画所需时长。
   await tester.pump(const Duration(milliseconds: 350));
+}
+
+/*
+ * 递归判断文本片段是否使用了指定的语法高亮颜色。
+ */
+bool textSpanContainsColor(InlineSpan span, Color color) {
+  if (span is! TextSpan) {
+    return false;
+  }
+  if (span.style?.color == color) {
+    return true;
+  }
+
+  return span.children?.any(
+        (InlineSpan child) => textSpanContainsColor(child, color),
+      ) ??
+      false;
 }
 
 /*
@@ -198,6 +218,88 @@ void main() {
   });
 
   /*
+   * 验证代码块语言输入会忽略首尾空白和大小写差异。
+   */
+  test('代码块语言会统一规范为小写', () async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: 'System.out.println("Hello");\n',
+    );
+    addTearDown(controller.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+
+    controller.applyCodeBlock('  JaVa  ');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(normalizeMarkdownCodeLanguage('javA'), 'java');
+    expect(controller.markdownText, contains('```java\n'));
+    expect(controller.markdownText, contains('System.out.println("Hello");'));
+  });
+
+  /*
+   * 验证空语言可以创建不带语言标识的普通代码块。
+   */
+  test('空语言可以创建普通代码块', () async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '普通代码\n',
+    );
+    addTearDown(controller.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+
+    controller.applyCodeBlock('');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText, contains('```\n普通代码\n```'));
+    expect(controller.markdownText, isNot(contains('```java')));
+  });
+
+  /*
+   * 验证已有 Markdown 的混合大小写语言标识仍会使用对应语法颜色。
+   */
+  testWidgets('混合大小写的 Java 代码块可以语法高亮', (WidgetTester tester) async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '```JaVa\npublic class Demo {}\n```\n',
+    );
+    final FocusNode focusNode = FocusNode();
+    final ScrollController scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+    addTearDown(scrollController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: SizedBox(
+            width: 480,
+            height: 320,
+            child: WysiwygMarkdownEditor(
+              controller: controller.quillController,
+              focusNode: focusNode,
+              scrollController: scrollController,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is RichText &&
+            widget.text.toPlainText().contains('public class Demo') &&
+            textSpanContainsColor(widget.text, const Color(0xFFD73A49)),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  /*
    * 验证缓存工具名称会过滤未知项、已移除工具、重复项并限制为最多七项。
    */
   test('缓存工具顺序可以安全恢复', () {
@@ -214,6 +316,7 @@ void main() {
         ToolbarActionKey.italic,
         ToolbarActionKey.list,
         ToolbarActionKey.orderedList,
+        ToolbarActionKey.codeBlock,
       ],
     );
     expect(toolbarActionKeysFromNames(null), defaultToolbarActionKeys);
@@ -234,6 +337,7 @@ void main() {
         ToolbarActionKey.bold,
         ToolbarActionKey.heading6,
         ToolbarActionKey.italic,
+        ToolbarActionKey.codeBlock,
       ],
     );
     expect(
@@ -241,8 +345,9 @@ void main() {
         ToolbarActionKey.bold,
         ToolbarActionKey.insertTable,
         ToolbarActionKey.orderedList,
+        ToolbarActionKey.codeBlock,
       ]),
-      <String>['bold', 'orderedList'],
+      <String>['bold', 'orderedList', 'codeBlock'],
     );
     expect(
       toolbarActionKeysFromNames(const <String>['undo', 'redo']),
@@ -278,6 +383,339 @@ void main() {
 
     expect(controller.markdownText, startsWith('### 第二篇'));
     expect(changeCount, 1);
+  });
+
+  /*
+   * 验证一次性粘贴完整网址后会立即高亮，并在站点名称返回后替换显示文字。
+   */
+  test('粘贴网址会自动转换为带站点名称的链接', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    int loadCount = 0;
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) {
+        loadCount += 1;
+        expect(pastedUrl, url);
+        return siteNameCompleter.future;
+      },
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(loadCount, 1);
+    expect(controller.quillController.document.toPlainText().trimRight(), url);
+    final Map<String, dynamic> insertedLink = controller
+        .quillController
+        .document
+        .toDelta()
+        .toJson()
+        .first;
+    expect(insertedLink['insert'], url);
+    expect((insertedLink['attributes']! as Map<String, dynamic>)['link'], url);
+
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText.trimRight(), '[DeepSeek]($url)');
+  });
+
+  /*
+   * 验证旧粘贴事件到达前网址已被删除时，不会把链接属性误加到后来的普通文字。
+   */
+  test('已删除的网址不会影响同位置的新文字', () async {
+    const String url = 'https://chat.deepseek.com/';
+    int loadCount = 0;
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) async {
+        loadCount += 1;
+        return 'DeepSeek';
+      },
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    controller.quillController.replaceText(
+      0,
+      url.length,
+      '',
+      const TextSelection.collapsed(offset: 0),
+    );
+    controller.quillController.replaceText(
+      0,
+      0,
+      '普通文字',
+      const TextSelection.collapsed(offset: 4),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(loadCount, 0);
+    expect(controller.quillController.document.toPlainText(), '普通文字\n');
+    expect(
+      controller.quillController.document
+          .collectStyle(0, 4)
+          .attributes[Attribute.link.key],
+      isNull,
+    );
+  });
+
+  /*
+   * 验证代码块中的网址保持代码字面量，不会请求或替换为网页站点名称。
+   */
+  test('代码块中的网址不会自动替换站点名称', () async {
+    const String url = 'https://chat.deepseek.com/';
+    int loadCount = 0;
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: 'placeholder\n',
+      siteNameLoader: (String pastedUrl) async {
+        loadCount += 1;
+        return 'DeepSeek';
+      },
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+    controller.applyCodeBlock('text');
+    await Future<void>.delayed(Duration.zero);
+    controller.quillController.replaceText(
+      0,
+      'placeholder'.length,
+      '',
+      const TextSelection.collapsed(offset: 0),
+    );
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(loadCount, 0);
+    expect(controller.quillController.document.toPlainText().trimRight(), url);
+    expect(controller.markdownText, contains(url));
+    expect(controller.markdownText, isNot(contains('](')));
+  });
+
+  /*
+   * 验证用户继续在链接后输入时，异步站点名称仍能更新原链接且不会吞掉后续内容。
+   */
+  test('站点名称返回时保留链接后的新输入', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) => siteNameCompleter.future,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    controller.quillController.replaceText(
+      url.length,
+      0,
+      ' 后续内容',
+      const TextSelection.collapsed(offset: url.length + 5),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText.trimRight(), '[DeepSeek]($url) 后续内容');
+  });
+
+  /*
+   * 验证网址整体使用的加粗等行内格式会保留到站点名称上。
+   */
+  test('站点名称替换会保留统一行内格式', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) => siteNameCompleter.future,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    controller.quillController.formatText(0, url.length, Attribute.bold);
+    await Future<void>.delayed(Duration.zero);
+
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final Map<String, dynamic> replacementOperation = controller
+        .quillController
+        .document
+        .toDelta()
+        .toJson()
+        .first;
+    expect(replacementOperation['insert'], 'DeepSeek');
+    expect(
+      (replacementOperation['attributes']! as Map<String, dynamic>)['bold'],
+      isTrue,
+    );
+    expect(
+      (replacementOperation['attributes']! as Map<String, dynamic>)['link'],
+      url,
+    );
+  });
+
+  /*
+   * 验证用户只修改网址局部格式时取消自动改名，避免丢失这次手动格式修改。
+   */
+  test('网址局部格式不一致时取消站点名称替换', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) => siteNameCompleter.future,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    controller.quillController.formatText(0, 5, Attribute.bold);
+    await Future<void>.delayed(Duration.zero);
+
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.quillController.document.toPlainText().trimRight(), url);
+    expect(controller.markdownText, isNot(contains('DeepSeek')));
+  });
+
+  /*
+   * 验证等待网页名称期间改为行内代码后，网址会恢复为不可改写的代码字面量。
+   */
+  test('等待期间改为行内代码会取消站点名称替换', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) => siteNameCompleter.future,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    controller.quillController.formatText(0, url.length, Attribute.inlineCode);
+    await Future<void>.delayed(Duration.zero);
+
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.quillController.document.toPlainText().trimRight(), url);
+    expect(
+      controller.quillController.document
+          .collectStyle(0, url.length)
+          .attributes[Attribute.inlineCode.key],
+      isNotNull,
+    );
+    expect(
+      controller.quillController.document
+          .collectStyle(0, url.length)
+          .attributes[Attribute.link.key],
+      isNull,
+    );
+    expect(controller.markdownText, isNot(contains('DeepSeek')));
+  });
+
+  /*
+   * 验证网页无法提供站点名称时仍会保留可点击的原始网址。
+   */
+  test('站点名称获取失败时保留原始网址链接', () async {
+    const String url = 'https://example.com/';
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) async => null,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.quillController.document.toPlainText().trimRight(), url);
+    expect(
+      controller.quillController.document
+          .collectStyle(0, url.length)
+          .attributes[Attribute.link.key]
+          ?.value,
+      url,
+    );
+  });
+
+  /*
+   * 验证切换笔记会使旧网址请求失效，返回结果不能写入新打开的正文。
+   */
+  test('切换笔记后忽略旧网址的站点名称', () async {
+    const String url = 'https://chat.deepseek.com/';
+    final Completer<String?> siteNameCompleter = Completer<String?>();
+    final MarkdownEditorController controller = MarkdownEditorController(
+      siteNameLoader: (String pastedUrl) => siteNameCompleter.future,
+    );
+    addTearDown(controller.dispose);
+
+    controller.quillController.replaceText(
+      0,
+      0,
+      url,
+      const TextSelection.collapsed(offset: url.length),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    controller.loadMarkdown('# 新笔记\n');
+    siteNameCompleter.complete('DeepSeek');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText, '# 新笔记\n');
+    expect(controller.markdownText, isNot(contains('DeepSeek')));
   });
 
   /*
@@ -589,6 +1027,10 @@ void main() {
       find.byKey(const ValueKey<String>('toolbar-repository-bold')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey<String>('toolbar-repository-codeBlock')),
+      findsOneWidget,
+    );
     final Finder firstRepositoryAction = find.byKey(
       const ValueKey<String>('toolbar-repository-heading6'),
     );
@@ -680,6 +1122,56 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     expect(isCustomizing, isFalse);
     expect(find.text('笔记正文内容'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('toolbar-repository')),
+      findsNothing,
+    );
+  });
+
+  /*
+   * 验证代码块工具可以从工具仓库直接点击执行。
+   */
+  testWidgets('点击仓库代码块工具可以直接回传动作', (WidgetTester tester) async {
+    final MarkdownEditorController controller = MarkdownEditorController();
+    ToolbarActionKey? pressedAction;
+    bool isCustomizing = false;
+    addTearDown(controller.dispose);
+    tester.view.physicalSize = const Size(320, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: MarkdownToolbar(
+            controller: controller.quillController,
+            onPressedAction: (ToolbarActionKey actionKey) {
+              pressedAction = actionKey;
+            },
+            onCustomizationChanged: (bool value) {
+              isCustomizing = value;
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(
+      find.byKey(const ValueKey<String>('toolbar-active-title')),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(isCustomizing, isTrue);
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('toolbar-repository-codeBlock')),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(pressedAction, ToolbarActionKey.codeBlock);
+    expect(isCustomizing, isFalse);
     expect(
       find.byKey(const ValueKey<String>('toolbar-repository')),
       findsNothing,

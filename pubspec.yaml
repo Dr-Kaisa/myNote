@@ -40,8 +40,20 @@ dependencies:
   flutter_quill: ^11.5.1
   markdown: ^7.3.1
   markdown_quill: ^4.3.0
+  # Markdown 代码块只读语法高亮依赖。
+  re_highlight: ^0.0.3
   path: ^1.9.1
   path_provider: ^2.1.6
+  # 笔记包压缩分享依赖。
+  archive: ^4.0.9
+  # HTML 资源引用解析依赖。
+  html: ^0.15.6
+  # 分享长图解码与拼接依赖。
+  image: ^4.9.1
+  # PDF 文件生成依赖。
+  pdf: ^3.13.0
+  # 系统分享面板调用依赖。
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:

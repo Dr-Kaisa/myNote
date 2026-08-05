@@ -183,6 +183,11 @@ const List<ToolbarActionItem> toolbarActions = <ToolbarActionItem>[
     label: '有序列表',
     icon: Icons.format_list_numbered_rounded,
   ),
+  ToolbarActionItem(
+    key: ToolbarActionKey.codeBlock,
+    label: '代码块',
+    icon: Icons.code_rounded,
+  ),
 ];
 
 /*
@@ -665,6 +670,32 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
 
     setState(() {
       _pressedRepositoryActionKey = null;
+    });
+  }
+
+  /*
+   * 处理工具仓库中的命令工具轻点操作。
+   *
+   * 代码块可以直接从仓库执行；先关闭仓库，再在下一帧交给页面弹出语言输入框。
+   */
+  void _handleRepositoryActionTap(ToolbarActionKey actionKey) {
+    if (actionKey != ToolbarActionKey.codeBlock ||
+        !_isActionEnabled(actionKey)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+
+      // 等仓库工具自身的点击手势结束后再卸载浮层，避免移动端卸载仍有依赖的 InkWell。
+      _leaveCustomizationMode();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _handleActionPressed(actionKey);
+        }
+      });
     });
   }
 
@@ -2074,11 +2105,17 @@ class _MarkdownToolbarState extends State<MarkdownToolbar>
                         side: BorderSide(color: colors.outline),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Center(
-                        child: _buildActionIcon(
-                          action,
-                          color: colors.onSurface,
-                          size: 21,
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        onTap: action.key == ToolbarActionKey.codeBlock
+                            ? () => _handleRepositoryActionTap(action.key)
+                            : null,
+                        child: Center(
+                          child: _buildActionIcon(
+                            action,
+                            color: colors.onSurface,
+                            size: 21,
+                          ),
                         ),
                       ),
                     ),
