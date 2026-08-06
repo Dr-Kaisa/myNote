@@ -3836,6 +3836,15 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
+   * 删除当前光标所在的 Markdown 代码块并恢复编辑焦点。
+   */
+  void _deleteMarkdownCodeBlock() {
+    if (_editorController.deleteCodeBlockAtSelection()) {
+      _editorFocusNode.requestFocus();
+    }
+  }
+
+  /*
    * 在当前选区插入一个可保存为 Markdown 的两列表格。
    */
   void _insertMarkdownTable() {
@@ -5725,6 +5734,7 @@ class _NoteHomePageState extends State<NoteHomePage>
                                 focusNode: _editorFocusNode,
                                 scrollController: _editorScrollController,
                                 metadataText: _buildEditorMetadataText(),
+                                onDeleteCodeBlock: _deleteMarkdownCodeBlock,
                               ),
                             ),
                     ),

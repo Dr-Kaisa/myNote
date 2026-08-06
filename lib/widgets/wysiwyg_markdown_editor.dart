@@ -5,6 +5,7 @@
  */
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:markdown/markdown.dart' as markdown;
 import 'package:markdown_quill/markdown_quill.dart';
@@ -57,6 +58,70 @@ final Highlight _markdownCodeHighlighter = Highlight()
     'xml': langXml,
     'yaml': langYaml,
   });
+
+/*
+ * 代码块可见背景装饰，在 Quill 固定内边距内收紧背景高度。
+ */
+class _MarkdownCodeBlockDecoration extends BoxDecoration {
+  /*
+   * 构造代码块可见背景装饰。
+   */
+  const _MarkdownCodeBlockDecoration({
+    required Color color,
+    required BorderRadius borderRadius,
+  }) : super(color: color, borderRadius: borderRadius);
+
+  /*
+   * 代码块背景上下内收距离。
+   */
+  final double verticalInset = 4;
+
+  /*
+   * 创建代码块背景绘制器。
+   */
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) {
+    return _MarkdownCodeBlockBoxPainter(this);
+  }
+}
+
+/*
+ * 代码块可见背景绘制器。
+ */
+class _MarkdownCodeBlockBoxPainter extends BoxPainter {
+  /*
+   * 构造代码块可见背景绘制器。
+   */
+  _MarkdownCodeBlockBoxPainter(this.decoration);
+
+  /*
+   * 当前代码块背景装饰配置。
+   */
+  final _MarkdownCodeBlockDecoration decoration;
+
+  /*
+   * 绘制上下收紧后的圆角代码块背景。
+   */
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    if (configuration.size == null) {
+      return;
+    }
+
+    final Rect backgroundRect = Rect.fromLTRB(
+      offset.dx,
+      offset.dy + decoration.verticalInset,
+      offset.dx + configuration.size!.width,
+      offset.dy + configuration.size!.height - decoration.verticalInset,
+    );
+    canvas.drawRRect(
+      decoration.borderRadius!
+          .resolve(configuration.textDirection)
+          .toRRect(backgroundRect),
+      Paint()..color = decoration.color!,
+    );
+  }
+}
 
 /*
  * Markdown 表格嵌入内容渲染组件。
@@ -365,6 +430,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
     required this.focusNode,
     required this.scrollController,
     this.metadataText,
+    this.onDeleteCodeBlock,
     super.key,
   });
 
@@ -389,6 +455,11 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   final String? metadataText;
 
   /*
+   * 删除当前代码块的回调。
+   */
+  final VoidCallback? onDeleteCodeBlock;
+
+  /*
    * 创建标题或正文的块级文字样式。
    */
   DefaultTextBlockStyle _buildTextBlockStyle({
@@ -398,6 +469,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
     required double bottomSpacing,
     required Color color,
     double height = 1.5,
+    TextLeadingDistribution? leadingDistribution,
     BoxDecoration? decoration,
   }) {
     return DefaultTextBlockStyle(
@@ -407,6 +479,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         fontSize: fontSize,
         fontWeight: fontWeight,
         height: height,
+        leadingDistribution: leadingDistribution,
         letterSpacing: 0,
         decoration: TextDecoration.none,
       ),
@@ -570,12 +643,19 @@ class WysiwygMarkdownEditor extends StatelessWidget {
       code: _buildTextBlockStyle(
         fontSize: 15,
         fontWeight: FontWeight.w400,
-        topSpacing: 0,
-        bottomSpacing: 0,
+        topSpacing: 8,
+        bottomSpacing: 8,
         color: colors.onSurface,
-        height: 1.55,
-        decoration: BoxDecoration(
-          color: colors.surfaceContainer,
+        height: 1.35,
+        leadingDistribution: TextLeadingDistribution.even,
+        decoration: _MarkdownCodeBlockDecoration(
+          // 编辑器代码块收紧背景颜色样式
+          color: Color.alphaBlend(
+            colors.brightness == Brightness.dark
+                ? const Color(0x1A000000)
+                : const Color(0x0F000000),
+            colors.surfaceContainer,
+          ),
           borderRadius: BorderRadius.circular(6),
         ),
       ),
@@ -649,6 +729,83 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   }
 
   /*
+   * 判断当前选区是否位于代码块内。
+   */
+  bool _isCurrentSelectionInCodeBlock() {
+    return controller.getSelectionStyle().attributes.containsKey(
+      Attribute.codeBlock.key,
+    );
+  }
+
+  /*
+   * 拦截空代码块起始位置的硬件回退键，避免代码块格式被取消。
+   */
+  KeyEventResult? _handleEditorKeyPressed(KeyEvent event, Node? node) {
+    if (event.logicalKey != LogicalKeyboardKey.backspace ||
+        !controller.selection.isCollapsed ||
+        !_isCurrentSelectionInCodeBlock()) {
+      return null;
+    }
+
+    final int selectionOffset = controller.selection.start;
+    final String documentText = controller.document.toPlainText();
+    final int currentLineStart = selectionOffset <= 0
+        ? 0
+        : documentText.lastIndexOf('\n', selectionOffset - 1) + 1;
+    if (selectionOffset < 0 ||
+        selectionOffset >= controller.document.length ||
+        selectionOffset != currentLineStart ||
+        controller.document.getPlainText(selectionOffset, 1) != '\n') {
+      return null;
+    }
+
+    return KeyEventResult.handled;
+  }
+
+  /*
+   * 构建当前代码块的快捷删除图标。
+   */
+  Widget _buildCodeBlockDeleteButton(double top) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (BuildContext context, Widget? child) {
+        if (onDeleteCodeBlock == null || !_isCurrentSelectionInCodeBlock()) {
+          return const SizedBox.shrink();
+        }
+
+        return Positioned(
+          // 当前代码块删除按钮定位样式
+          top: top,
+          right: 0,
+          child: Tooltip(
+            message: '删除代码块',
+            child: Material(
+              // 当前代码块删除按钮背景样式
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              shape: const CircleBorder(),
+              child: IconButton(
+                // 当前代码块删除按钮尺寸样式
+                constraints: const BoxConstraints.tightFor(
+                  width: 34,
+                  height: 34,
+                ),
+                padding: EdgeInsets.zero,
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  // 当前代码块删除按钮图标样式
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  size: 18,
+                ),
+                onPressed: onDeleteCodeBlock,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /*
    * 按指定内边距构建使用原生滚动优化的 Quill 正文编辑区域。
    */
   Widget _buildQuillEditor(BuildContext context, EdgeInsets padding) {
@@ -674,6 +831,9 @@ class WysiwygMarkdownEditor extends StatelessWidget {
         unknownEmbedBuilder: const _MarkdownEmbedFallbackBuilder(),
         // 代码语法颜色仅在文本绘制时生成，不写入 Markdown 文档。
         textSpanBuilder: _buildMarkdownTextSpan,
+        // 硬件回退键在空代码块中保持块级格式。
+        // ignore: experimental_member_use
+        onKeyPressed: _handleEditorKeyPressed,
       ),
     );
   }
@@ -684,7 +844,14 @@ class WysiwygMarkdownEditor extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (metadataText == null) {
-      return _buildQuillEditor(context, const EdgeInsets.fromLTRB(0, 6, 0, 24));
+      return Stack(
+        // 无元信息时编辑器和代码块删除按钮共用可用区域样式
+        fit: StackFit.expand,
+        children: <Widget>[
+          _buildQuillEditor(context, const EdgeInsets.fromLTRB(0, 6, 0, 24)),
+          _buildCodeBlockDeleteButton(8),
+        ],
+      );
     }
 
     return ClipRect(
@@ -731,6 +898,7 @@ class WysiwygMarkdownEditor extends StatelessWidget {
               },
             ),
           ),
+          _buildCodeBlockDeleteButton(30),
         ],
       ),
     );

@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:markdown_quill/markdown_quill.dart';
@@ -239,9 +240,9 @@ void main() {
   });
 
   /*
-   * 验证空语言可以创建不带语言标识的普通代码块。
+   * 验证空语言会在原段落之后创建不带语言标识的普通代码块。
    */
-  test('空语言可以创建普通代码块', () async {
+  test('空语言可以在新行创建普通代码块', () async {
     final MarkdownEditorController controller = MarkdownEditorController(
       initialMarkdown: '普通代码\n',
     );
@@ -254,8 +255,52 @@ void main() {
     controller.applyCodeBlock('');
     await Future<void>.delayed(Duration.zero);
 
-    expect(controller.markdownText, contains('```\n普通代码\n```'));
+    expect(controller.markdownText, contains('普通代码\n\n```\n\n```'));
     expect(controller.markdownText, isNot(contains('```java')));
+  });
+
+  /*
+   * 验证空代码块被回退键取消格式后会自动恢复，必须通过显式删除入口移除。
+   */
+  test('空代码块回退后仍保留代码块格式', () async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '```java\n\n```\n',
+    );
+    addTearDown(controller.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+
+    controller.quillController.formatSelection(
+      Attribute.clone(Attribute.codeBlock, null),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText, contains('```java\n\n```'));
+  });
+
+  /*
+   * 验证显式删除入口会删除当前代码块并保留相邻普通段落。
+   */
+  test('删除代码块入口会移除完整代码块', () async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '前文\n```java\n内容\n```\n后文\n',
+    );
+    addTearDown(controller.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 3),
+      ChangeSource.local,
+    );
+
+    expect(controller.deleteCodeBlockAtSelection(), isTrue);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.markdownText, contains('前文'));
+    expect(controller.markdownText, contains('后文'));
+    expect(controller.markdownText, isNot(contains('```')));
+    expect(controller.markdownText, isNot(contains('内容')));
   });
 
   /*
@@ -297,6 +342,91 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  /*
+   * 验证光标位于代码块内时会显示快捷删除图标。
+   */
+  testWidgets('代码块内会显示快捷删除图标', (WidgetTester tester) async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '```\n内容\n```\n',
+    );
+    final FocusNode focusNode = FocusNode();
+    final ScrollController scrollController = ScrollController();
+    bool didRequestDelete = false;
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+    addTearDown(scrollController.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 0),
+      ChangeSource.local,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: SizedBox(
+            width: 480,
+            height: 320,
+            child: WysiwygMarkdownEditor(
+              controller: controller.quillController,
+              focusNode: focusNode,
+              scrollController: scrollController,
+              onDeleteCodeBlock: () {
+                didRequestDelete = true;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('删除代码块'));
+    expect(didRequestDelete, isTrue);
+  });
+
+  /*
+   * 验证有内容的代码行末尾不会被空代码块保护逻辑拦截。
+   */
+  testWidgets('代码块内容可以使用回退键逐字删除', (WidgetTester tester) async {
+    final MarkdownEditorController controller = MarkdownEditorController(
+      initialMarkdown: '```dart\nabc\n```\n',
+    );
+    final FocusNode focusNode = FocusNode();
+    final ScrollController scrollController = ScrollController();
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+    addTearDown(scrollController.dispose);
+    controller.quillController.updateSelection(
+      const TextSelection.collapsed(offset: 3),
+      ChangeSource.local,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: SizedBox(
+            width: 480,
+            height: 320,
+            child: WysiwygMarkdownEditor(
+              controller: controller.quillController,
+              focusNode: focusNode,
+              scrollController: scrollController,
+            ),
+          ),
+        ),
+      ),
+    );
+    focusNode.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    expect(controller.quillController.document.toPlainText(), 'ab\n');
+    expect(controller.markdownText, contains('ab'));
   });
 
   /*
@@ -480,7 +610,7 @@ void main() {
     const String url = 'https://chat.deepseek.com/';
     int loadCount = 0;
     final MarkdownEditorController controller = MarkdownEditorController(
-      initialMarkdown: 'placeholder\n',
+      initialMarkdown: '```text\n\n```\n',
       siteNameLoader: (String pastedUrl) async {
         loadCount += 1;
         return 'DeepSeek';
@@ -488,18 +618,6 @@ void main() {
     );
     addTearDown(controller.dispose);
 
-    controller.quillController.updateSelection(
-      const TextSelection.collapsed(offset: 0),
-      ChangeSource.local,
-    );
-    controller.applyCodeBlock('text');
-    await Future<void>.delayed(Duration.zero);
-    controller.quillController.replaceText(
-      0,
-      'placeholder'.length,
-      '',
-      const TextSelection.collapsed(offset: 0),
-    );
     controller.quillController.replaceText(
       0,
       0,

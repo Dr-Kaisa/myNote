@@ -104,6 +104,7 @@ class MarkdownEditorController extends ChangeNotifier {
       selection: const TextSelection.collapsed(offset: 0),
     );
     quillController.moveCursorToEnd();
+    _previousDocumentDelta = quillController.document.toDelta();
     _listenToDocumentChanges();
   }
 
@@ -153,6 +154,16 @@ class MarkdownEditorController extends ChangeNotifier {
   bool _isDisposed = false;
 
   /*
+   * 上一次文档 Delta，用于识别被回退键清空格式的空代码块。
+   */
+  late Delta _previousDocumentDelta;
+
+  /*
+   * 是否正在恢复被回退键移除的空代码块格式。
+   */
+  bool _isRestoringProtectedCodeBlock = false;
+
+  /*
    * 当前与富文本文档同步的 Markdown 文本。
    */
   String _markdown;
@@ -163,19 +174,109 @@ class MarkdownEditorController extends ChangeNotifier {
   String get markdownText => _markdown;
 
   /*
-   * 把当前行或选区设置为指定语言的 Markdown 代码块。
+   * 在当前行之后创建指定语言的 Markdown 代码块。
    *
-   * 空语言会移除围栏代码的语言标识，非空语言统一保存为小写。
+   * 无论光标位于段落的哪个位置，代码块都会从新的独立行开始；空语言会移除
+   * 围栏代码的语言标识，非空语言统一保存为小写。
    */
   void applyCodeBlock(String language) {
     final String normalizedLanguage = normalizeMarkdownCodeLanguage(language);
+    final String documentText = quillController.document.toPlainText();
+    final int maximumIndex = quillController.document.length - 1;
+    final int selectionIndex = quillController.selection.start < 0
+        ? 0
+        : quillController.selection.start > maximumIndex
+        ? maximumIndex
+        : quillController.selection.start;
+    final int currentLineStart = _findLineStart(documentText, selectionIndex);
+    final int currentLineEnd = documentText.indexOf('\n', selectionIndex);
+    final int codeBlockStart;
 
+    if (currentLineStart == currentLineEnd) {
+      codeBlockStart = currentLineStart;
+    } else {
+      final bool isLastDocumentLine =
+          currentLineEnd == quillController.document.length - 1;
+      final int insertionIndex = isLastDocumentLine
+          ? currentLineEnd
+          : currentLineEnd + 1;
+      final Delta change = Delta();
+      if (insertionIndex > 0) {
+        change.retain(insertionIndex);
+      }
+      change.insert('\n');
+      quillController.compose(
+        change,
+        TextSelection.collapsed(offset: insertionIndex),
+        ChangeSource.local,
+      );
+      codeBlockStart = isLastDocumentLine ? insertionIndex + 1 : insertionIndex;
+    }
+
+    quillController.updateSelection(
+      TextSelection.collapsed(offset: codeBlockStart),
+      ChangeSource.local,
+    );
     quillController.formatSelection(Attribute.codeBlock);
     quillController.formatSelection(
       MarkdownCodeBlockLanguageAttribute(
         normalizedLanguage.isEmpty ? null : normalizedLanguage,
       ),
     );
+  }
+
+  /*
+   * 删除光标所在的完整 Markdown 代码块。
+   *
+   * 返回 false 表示当前光标不在代码块内，不会修改文档。
+   */
+  bool deleteCodeBlockAtSelection() {
+    final String documentText = quillController.document.toPlainText();
+    final int maximumIndex = quillController.document.length - 1;
+    final int selectionIndex = quillController.selection.start < 0
+        ? 0
+        : quillController.selection.start > maximumIndex
+        ? maximumIndex
+        : quillController.selection.start;
+    int blockStart = _findLineStart(documentText, selectionIndex);
+    int blockEnd = documentText.indexOf('\n', selectionIndex);
+
+    if (!_isCodeBlockLineAt(blockEnd)) {
+      return false;
+    }
+
+    while (blockStart > 0) {
+      final int previousLineEnd = blockStart - 1;
+      if (!_isCodeBlockLineAt(previousLineEnd)) {
+        break;
+      }
+      blockStart = _findLineStart(documentText, previousLineEnd);
+    }
+
+    while (blockEnd + 1 < documentText.length) {
+      final int nextLineEnd = documentText.indexOf('\n', blockEnd + 1);
+      if (!_isCodeBlockLineAt(nextLineEnd)) {
+        break;
+      }
+      blockEnd = nextLineEnd;
+    }
+
+    final int deleteLength = blockEnd - blockStart + 1;
+    final Delta change = Delta();
+    if (blockStart > 0) {
+      change.retain(blockStart);
+    }
+    change.delete(deleteLength);
+    if (deleteLength == documentText.length) {
+      change.insert('\n');
+    }
+
+    quillController.compose(
+      change,
+      TextSelection.collapsed(offset: blockStart),
+      ChangeSource.local,
+    );
+    return true;
   }
 
   /*
@@ -193,6 +294,7 @@ class MarkdownEditorController extends ChangeNotifier {
     _documentChangeSubscription?.cancel();
     _markdown = markdownText;
     quillController.moveCursorToEnd();
+    _previousDocumentDelta = quillController.document.toDelta();
     previousDocument.close();
     _listenToDocumentChanges();
   }
@@ -281,6 +383,117 @@ class MarkdownEditorController extends ChangeNotifier {
     _documentChangeSubscription = quillController.changes.listen(
       _handleDocumentChanged,
     );
+  }
+
+  /*
+   * 根据文档偏移读取所在行的起始位置。
+   */
+  int _findLineStart(String documentText, int offset) {
+    if (offset <= 0) {
+      return 0;
+    }
+
+    return documentText.lastIndexOf('\n', offset - 1) + 1;
+  }
+
+  /*
+   * 判断指定换行符是否属于代码块行。
+   */
+  bool _isCodeBlockLineAt(int lineEndOffset) {
+    if (lineEndOffset < 0 ||
+        lineEndOffset >= quillController.document.length ||
+        quillController.document.getPlainText(lineEndOffset, 1) != '\n') {
+      return false;
+    }
+
+    return quillController.document
+        .collectStyle(lineEndOffset, 1)
+        .attributes
+        .containsKey(Attribute.codeBlock.key);
+  }
+
+  /*
+   * 读取 Delta 中所有空代码块行的起始位置和语言标识。
+   */
+  Map<int, String?> _readEmptyCodeBlockLanguages(Delta documentDelta) {
+    final Map<int, String?> result = <int, String?>{};
+    int documentOffset = 0;
+    int lineStart = 0;
+    bool hasLineContent = false;
+
+    for (final Operation operation in documentDelta.toList()) {
+      if (operation.data is! String) {
+        documentOffset += operation.length ?? 0;
+        hasLineContent = true;
+        continue;
+      }
+
+      final String text = operation.data! as String;
+      for (int index = 0; index < text.length; index++) {
+        if (text.codeUnitAt(index) == 10) {
+          if (!hasLineContent &&
+              operation.attributes?[Attribute.codeBlock.key] != null) {
+            result[lineStart] = operation
+                .attributes?[markdownCodeBlockLanguageAttributeKey]
+                ?.toString();
+          }
+          lineStart = documentOffset + 1;
+          hasLineContent = false;
+        } else {
+          hasLineContent = true;
+        }
+        documentOffset += 1;
+      }
+    }
+
+    return result;
+  }
+
+  /*
+   * 恢复被回退键取消块级格式的空代码块。
+   *
+   * 软键盘不会经过硬件键盘回调，因此通过文档变化补回代码块属性。
+   */
+  void _restoreProtectedCodeBlocks(DocChange change) {
+    if (_isRestoringProtectedCodeBlock) {
+      return;
+    }
+
+    final Map<int, String?> emptyCodeBlocks = _readEmptyCodeBlockLanguages(
+      _previousDocumentDelta,
+    );
+    if (emptyCodeBlocks.isEmpty) {
+      return;
+    }
+
+    final Map<int, String?> restoreTargets = <int, String?>{};
+    for (final MapEntry<int, String?> entry in emptyCodeBlocks.entries) {
+      final int currentOffset = change.change.transformPosition(entry.key);
+      if (currentOffset >= 0 &&
+          currentOffset < quillController.document.length &&
+          quillController.document.getPlainText(currentOffset, 1) == '\n' &&
+          !_isCodeBlockLineAt(currentOffset)) {
+        restoreTargets[currentOffset] = entry.value;
+      }
+    }
+    if (restoreTargets.isEmpty) {
+      return;
+    }
+
+    _isRestoringProtectedCodeBlock = true;
+    try {
+      for (final MapEntry<int, String?> entry in restoreTargets.entries) {
+        quillController
+          ..formatText(entry.key, 1, Attribute.codeBlock)
+          ..formatText(
+            entry.key,
+            1,
+            MarkdownCodeBlockLanguageAttribute(entry.value),
+          );
+      }
+    } finally {
+      _isRestoringProtectedCodeBlock = false;
+    }
   }
 
   /*
@@ -516,6 +729,9 @@ class MarkdownEditorController extends ChangeNotifier {
    * 把用户修改后的 Quill 文档同步为 Markdown，并通知页面保存。
    */
   void _handleDocumentChanged(DocChange change) {
+    _restoreProtectedCodeBlocks(change);
+    _previousDocumentDelta = quillController.document.toDelta();
+
     if (change.source == ChangeSource.silent &&
         _pretransformedAutomaticChangeCount > 0) {
       _pretransformedAutomaticChangeCount -= 1;
