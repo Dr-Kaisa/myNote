@@ -323,7 +323,7 @@ class NoteSettingsPage extends StatelessWidget {
  * 笔记主页状态对象。
  */
 class _NoteHomePageState extends State<NoteHomePage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   /*
    * 获取当前主题语义颜色。
    */
@@ -338,6 +338,11 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 笔记包文档抽屉侧边入口高度。
    */
   static const double _packageDrawerRailHeight = 48;
+
+  /*
+   * 卡片展开到页面时，主体铺满屏幕所处的动画进度。
+   */
+  static const double _browserOpenCoveredProgress = 0.76;
 
   /*
    * 笔记存储服务实例。
@@ -395,9 +400,34 @@ class _NoteHomePageState extends State<NoteHomePage>
   final GlobalKey _homePanelKey = GlobalKey();
 
   /*
+   * 页面主体定位标识，用于把卡片全局坐标转换为展开动画坐标。
+   */
+  final GlobalKey _pageBodyKey = GlobalKey();
+
+  /*
    * 浏览项定位标识集合。
    */
   final Map<String, GlobalKey> _browserItemKeys = <String, GlobalKey>{};
+
+  /*
+   * 浏览项打开动画控制器。
+   */
+  late final AnimationController _browserOpenTransitionController;
+
+  /*
+   * 当前正在展开的浏览项。
+   */
+  NoteGridItem? _browserOpenTransitionItem;
+
+  /*
+   * 浏览项展开动画的起始矩形。
+   */
+  Rect? _browserOpenTransitionStartRect;
+
+  /*
+   * 浏览项展开动画的结束矩形。
+   */
+  Rect? _browserOpenTransitionEndRect;
 
   /*
    * 当前更多菜单浮层。
@@ -445,6 +475,18 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 包内文档切换抽屉是否展开。
    */
   bool _isPackageDrawerOpen = false;
+
+  /*
+   * 笔记包文档抽屉当前向左拖动的像素距离。
+   */
+  final ValueNotifier<double> _packageDrawerDragOffset = ValueNotifier<double>(
+    0,
+  );
+
+  /*
+   * 笔记包文档抽屉是否正在跟随手指横向拖动。
+   */
+  bool _isPackageDrawerDragging = false;
 
   /*
    * 笔记包文档抽屉侧边入口的归一化垂直位置。
@@ -597,6 +639,7 @@ class _NoteHomePageState extends State<NoteHomePage>
     super.initState();
     // 注册应用生命周期监听，在应用切到后台前尽快保存当前编辑内容。
     WidgetsBinding.instance.addObserver(this);
+    _browserOpenTransitionController = AnimationController(vsync: this);
     _initializeNotes();
     _editorController.addListener(_handleEditorTextChanged);
   }
@@ -637,6 +680,8 @@ class _NoteHomePageState extends State<NoteHomePage>
     _editorFocusNode.dispose();
     _editorScrollController.dispose();
     _packageDrawerRailPosition.dispose();
+    _packageDrawerDragOffset.dispose();
+    _browserOpenTransitionController.dispose();
     super.dispose();
   }
 
@@ -1181,7 +1226,7 @@ class _NoteHomePageState extends State<NoteHomePage>
         : 224;
     final double menuHeight = menuType == EditorActionMenuType.share
         ? 52 * 4
-        : 52 * 4 + 1;
+        : 52 * 5 + 2;
     final double menuWidth = screenSize.width < requestedWidth + 24
         ? screenSize.width - 24
         : requestedWidth;
@@ -1217,6 +1262,8 @@ class _NoteHomePageState extends State<NoteHomePage>
       onHidden: () {
         if (value == 'settings') {
           _openSettingsPage();
+        } else if (value == 'about') {
+          unawaited(_showNoteAbout());
         } else if (value == 'move') {
           unawaited(_showActivePackageMoveSheet());
         } else if (value == 'delete') {
@@ -1226,41 +1273,53 @@ class _NoteHomePageState extends State<NoteHomePage>
         } else if (value == 'shareText') {
           unawaited(
             _shareActiveNote(
-              (NoteItem note, Rect? origin) =>
-                  _noteShareService.shareMarkdownText(note, origin),
+              (NoteItem note, Rect? origin, VoidCallback onPrepared) =>
+                  _noteShareService.shareMarkdownText(
+                    note,
+                    origin,
+                    onPrepared: onPrepared,
+                  ),
             ),
           );
         } else if (value == 'shareFiles') {
           unawaited(
             _shareActiveNote(
-              (NoteItem note, Rect? origin) =>
-                  _noteShareService.sharePackageFiles(note, origin),
+              (NoteItem note, Rect? origin, VoidCallback onPrepared) =>
+                  _noteShareService.sharePackageFiles(
+                    note,
+                    origin,
+                    onPrepared: onPrepared,
+                  ),
             ),
           );
         } else if (value == 'shareImage') {
           unawaited(
             _shareActiveNote(
-              (NoteItem note, Rect? origin) => _noteShareService.shareAsImages(
-                note,
-                (onPage) => _captureActiveEditorPages(
-                  onPage,
-                  renderMode: EditorShareRenderMode.image,
-                ),
-                origin,
-              ),
+              (NoteItem note, Rect? origin, VoidCallback onPrepared) =>
+                  _noteShareService.shareAsImages(
+                    note,
+                    (onPage) => _captureActiveEditorPages(
+                      onPage,
+                      renderMode: EditorShareRenderMode.image,
+                    ),
+                    origin,
+                    onPrepared: onPrepared,
+                  ),
             ),
           );
         } else if (value == 'sharePdf') {
           unawaited(
             _shareActiveNote(
-              (NoteItem note, Rect? origin) => _noteShareService.shareAsPdf(
-                note,
-                (onPage) => _captureActiveEditorPages(
-                  onPage,
-                  renderMode: EditorShareRenderMode.pdf,
-                ),
-                origin,
-              ),
+              (NoteItem note, Rect? origin, VoidCallback onPrepared) =>
+                  _noteShareService.shareAsPdf(
+                    note,
+                    (onPage) => _captureActiveEditorPages(
+                      onPage,
+                      renderMode: EditorShareRenderMode.pdf,
+                    ),
+                    origin,
+                    onPrepared: onPrepared,
+                  ),
             ),
           );
         }
@@ -1360,6 +1419,8 @@ class _NoteHomePageState extends State<NoteHomePage>
               value: 'deleteAll',
               isDestructive: true,
             ),
+            Divider(height: 1, color: _colors.outlineVariant),
+            _buildEditorActionMenuItem(label: '关于', value: 'about'),
           ]
         : <Widget>[
             _buildEditorActionMenuItem(label: '以文本形式分享', value: 'shareText'),
@@ -1419,6 +1480,138 @@ class _NoteHomePageState extends State<NoteHomePage>
           ),
         ),
       ),
+    );
+  }
+
+  /*
+   * 将关于弹窗的时间显示为本地日期和时分秒，并标注历史估算值。
+   */
+  String _formatAboutTime(DateTime time, {bool estimated = false}) {
+    return '${time.toLocal().toIso8601String().split('.').first.replaceFirst('T', ' ')}${estimated ? '（估算）' : ''}';
+  }
+
+  /*
+   * 将磁盘字节数转换为适合阅读的二进制容量。
+   */
+  String _formatAboutSize(int bytes) {
+    const List<String> units = <String>['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    double size = bytes.toDouble();
+    int unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit += 1;
+    }
+    return '${size.toStringAsFixed(unit == 0 ? 0 : 2)} ${units[unit]}';
+  }
+
+  /*
+   * 构建可换行的关于信息行，标签和值通过弹性布局适配窄屏。
+   */
+  Widget _buildNoteAboutRow(String label, String value) {
+    return Padding(
+      // 信息行上下留白，长名称和日期允许自动换行。
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Expanded(flex: 2, child: Text(label)),
+          const SizedBox(width: 12),
+          Expanded(flex: 3, child: SelectableText(value)),
+        ],
+      ),
+    );
+  }
+
+  /*
+   * 保存当前编辑后展示笔记信息，统计在弹窗内异步加载并允许随时关闭。
+   */
+  Future<void> _showNoteAbout() async {
+    if (_activeNote == null || !await _flushPendingEditorSave() || !mounted) {
+      return;
+    }
+    final NoteItem note = _activeNote!;
+    final Future<NoteInformation> information = _noteStorageService
+        .getNoteInformation(note);
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('关于'),
+          scrollable: true,
+          content: SizedBox(
+            // 内容宽度受弹窗可用空间约束，纵向内容由弹窗滚动。
+            width: 360,
+            child: FutureBuilder<NoteInformation>(
+              future: information,
+              builder:
+                  (
+                    BuildContext context,
+                    AsyncSnapshot<NoteInformation> snapshot,
+                  ) {
+                    if (snapshot.hasError) {
+                      return const Text('读取笔记信息失败，请关闭后重试。');
+                    }
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final NoteInformation info = snapshot.data!;
+                    return Column(
+                      // 信息按当前文档、笔记包和磁盘统计纵向排列。
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        _buildNoteAboutRow('笔记包', note.packageName),
+                        _buildNoteAboutRow('当前文档', note.fileName),
+                        _buildNoteAboutRow(
+                          '文档创建时间',
+                          _formatAboutTime(
+                            info.documentCreatedAt,
+                            estimated: info.documentCreatedAtEstimated,
+                          ),
+                        ),
+                        _buildNoteAboutRow(
+                          '文档修改时间',
+                          _formatAboutTime(info.documentUpdatedAt),
+                        ),
+                        _buildNoteAboutRow(
+                          '笔记包创建时间',
+                          _formatAboutTime(
+                            info.packageCreatedAt,
+                            estimated: info.packageCreatedAtEstimated,
+                          ),
+                        ),
+                        _buildNoteAboutRow(
+                          '包内最近修改',
+                          _formatAboutTime(info.packageUpdatedAt),
+                        ),
+                        _buildNoteAboutRow(
+                          'Markdown 文档',
+                          '${info.documentCount} 篇',
+                        ),
+                        _buildNoteAboutRow('文件总数', '${info.fileCount} 个'),
+                        _buildNoteAboutRow(
+                          '总大小',
+                          _formatAboutSize(info.totalBytes),
+                        ),
+                        _buildNoteAboutRow('相对路径', note.relativePath),
+                        const SizedBox(height: 8),
+                        const Text('文件数和大小包含包内全部文档、资源及元数据，不含文件夹和符号链接。'),
+                        if (info.documentCreatedAtEstimated ||
+                            info.packageCreatedAtEstimated)
+                          const Text('旧笔记未记录原始创建时间，估算值根据首次补录时的文件时间保存。'),
+                      ],
+                    );
+                  },
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1879,7 +2072,8 @@ class _NoteHomePageState extends State<NoteHomePage>
    * 保存当前文档后执行指定系统分享操作。
    */
   Future<void> _shareActiveNote(
-    Future<void> Function(NoteItem note, Rect? origin) shareAction,
+    Future<void> Function(NoteItem note, Rect? origin, VoidCallback onPrepared)
+    shareAction,
   ) async {
     if (_activeNote == null || _isShareOperationInProgress) {
       return;
@@ -1906,6 +2100,18 @@ class _NoteHomePageState extends State<NoteHomePage>
         );
       },
     );
+    bool isProgressVisible = true;
+    /*
+     * 文件准备完成或发生异常时移除遮罩，重复调用不会再次移除。
+     */
+    void dismissProgress() {
+      if (isProgressVisible) {
+        isProgressVisible = false;
+        progressOverlay.remove();
+        progressOverlay.dispose();
+      }
+    }
+
     setState(() {
       _isShareOperationInProgress = true;
     });
@@ -1915,11 +2121,15 @@ class _NoteHomePageState extends State<NoteHomePage>
       if (!await _flushPendingEditorSave()) {
         return;
       }
-      await shareAction(_activeNote!, shareOrigin);
+      await shareAction(_activeNote!, shareOrigin, dismissProgress);
     } catch (error) {
-      await _showMessageDialog('分享失败', error.toString());
+      // 先撤下遮罩，避免错误弹窗被盖住后无法关闭。
+      dismissProgress();
+      if (mounted) {
+        await _showMessageDialog('分享失败', error.toString());
+      }
     } finally {
-      progressOverlay.remove();
+      dismissProgress();
       _setEditorInteractionLocked(false);
       if (mounted) {
         setState(() {
@@ -2452,6 +2662,86 @@ class _NoteHomePageState extends State<NoteHomePage>
   }
 
   /*
+   * 从文件夹卡片位置展开并打开对应目录。
+   */
+  Future<void> _handleOpenDirectory(
+    NoteGridItem item, {
+    required bool isWideLayout,
+  }) async {
+    await _runBrowserItemOpenTransition(
+      item: item,
+      isWideLayout: isWideLayout,
+      onCovered: () {
+        _handleDirectoryChanged(item.locationText);
+      },
+    );
+  }
+
+  /*
+   * 从浏览项位置展开到页面，完全遮住原页面后再切换目标内容。
+   */
+  Future<void> _runBrowserItemOpenTransition({
+    required NoteGridItem item,
+    required bool isWideLayout,
+    required VoidCallback onCovered,
+  }) async {
+    if (isWideLayout || _browserOpenTransitionItem != null) {
+      if (_browserOpenTransitionItem == null) {
+        onCovered();
+      }
+      return;
+    }
+
+    final Rect? startRect = _getBrowserItemRectInPage(item.id);
+    final Rect? endRect = _getBrowserOpenDestinationRect();
+
+    if (startRect == null || endRect == null) {
+      onCovered();
+      return;
+    }
+
+    _browserOpenTransitionController.value = 0;
+    setState(() {
+      _browserOpenTransitionItem = item;
+      _browserOpenTransitionStartRect = startRect;
+      _browserOpenTransitionEndRect = endRect;
+    });
+
+    try {
+      await _browserOpenTransitionController
+          .animateTo(
+            _browserOpenCoveredProgress,
+            duration: const Duration(milliseconds: 190),
+            curve: Curves.easeOutCubic,
+          )
+          .orCancel;
+
+      if (!mounted) {
+        return;
+      }
+
+      onCovered();
+      await _browserOpenTransitionController
+          .animateTo(
+            1,
+            duration: const Duration(milliseconds: 70),
+            curve: Curves.easeOut,
+          )
+          .orCancel;
+    } catch (_) {
+      // 页面销毁或动画被取消时直接清理覆盖层，不再继续切换页面。
+    } finally {
+      if (mounted) {
+        setState(() {
+          _browserOpenTransitionItem = null;
+          _browserOpenTransitionStartRect = null;
+          _browserOpenTransitionEndRect = null;
+        });
+      }
+    }
+  }
+
+  /*
    * 切换当前目录。
    */
   void _handleDirectoryChanged(String directoryPath) {
@@ -2854,6 +3144,7 @@ class _NoteHomePageState extends State<NoteHomePage>
    */
   Future<void> _handleSelectNote(
     NoteItem note, {
+    required NoteGridItem sourceItem,
     required bool isWideLayout,
   }) async {
     if (_isSelectionMode) {
@@ -2863,9 +3154,15 @@ class _NoteHomePageState extends State<NoteHomePage>
 
     if (_activeNote?.relativePath == note.relativePath) {
       if (!isWideLayout && _isCompactBrowserVisible) {
-        setState(() {
-          _isCompactBrowserVisible = false;
-        });
+        await _runBrowserItemOpenTransition(
+          item: sourceItem,
+          isWideLayout: isWideLayout,
+          onCovered: () {
+            setState(() {
+              _isCompactBrowserVisible = false;
+            });
+          },
+        );
       }
       return;
     }
@@ -2888,10 +3185,16 @@ class _NoteHomePageState extends State<NoteHomePage>
         return;
       }
 
-      _activateNote(
-        selectedNote,
+      await _runBrowserItemOpenTransition(
+        item: sourceItem,
         isWideLayout: isWideLayout,
-        packageNotes: packageNotes,
+        onCovered: () {
+          _activateNote(
+            selectedNote,
+            isWideLayout: isWideLayout,
+            packageNotes: packageNotes,
+          );
+        },
       );
     } catch (error) {
       await _showMessageDialog('打开笔记包失败', error.toString());
@@ -3045,7 +3348,16 @@ class _NoteHomePageState extends State<NoteHomePage>
         isWideLayout: MediaQuery.of(context).size.width >= 980,
         packageNotes: packageNotes,
       );
-      _editorFocusNode.requestFocus();
+      // 新建文档从空白一级标题开始输入，等待编辑器解除锁定并完成布局后聚焦。
+      _editorController.quillController.updateSelection(
+        const TextSelection.collapsed(offset: 0),
+        ChangeSource.local,
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _activeNote?.relativePath == newNote.relativePath) {
+          _editorFocusNode.requestFocus();
+        }
+      });
     } catch (error) {
       await _showMessageDialog('新建文档失败', error.toString());
     } finally {
@@ -3119,6 +3431,106 @@ class _NoteHomePageState extends State<NoteHomePage>
    */
   GlobalKey _getBrowserItemKey(String itemId) {
     return _browserItemKeys.putIfAbsent(itemId, GlobalKey.new);
+  }
+
+  /*
+   * 开始横向拖动笔记包文档抽屉。
+   */
+  void _handlePackageDrawerDragStart(DragStartDetails details) {
+    setState(() {
+      _isPackageDrawerDragging = true;
+    });
+  }
+
+  /*
+   * 根据手指位移更新笔记包文档抽屉的位置。
+   */
+  void _handlePackageDrawerDragUpdate(
+    DragUpdateDetails details,
+    double drawerWidth,
+  ) {
+    // 逐帧只通知抽屉位移和遮罩，避免重建编辑器及文档列表。
+    _packageDrawerDragOffset.value =
+        (_packageDrawerDragOffset.value + details.delta.dx)
+            .clamp(-drawerWidth, 0.0)
+            .toDouble();
+  }
+
+  /*
+   * 根据拖动距离和滑动速度决定收起或复位笔记包文档抽屉。
+   */
+  void _handlePackageDrawerDragEnd(DragEndDetails details, double drawerWidth) {
+    final bool shouldClose =
+        _packageDrawerDragOffset.value.abs() >= drawerWidth * 0.32 ||
+        (details.primaryVelocity ?? 0) <= -700;
+
+    setState(() {
+      _isPackageDrawerDragging = false;
+      _packageDrawerDragOffset.value = 0;
+      if (shouldClose) {
+        _isPackageDrawerOpen = false;
+      }
+    });
+  }
+
+  /*
+   * 取消拖动时让笔记包文档抽屉回到展开位置。
+   */
+  void _handlePackageDrawerDragCancel() {
+    setState(() {
+      _isPackageDrawerDragging = false;
+      _packageDrawerDragOffset.value = 0;
+    });
+  }
+
+  /*
+   * 获取浏览项在页面动画层中的矩形位置。
+   */
+  Rect? _getBrowserItemRectInPage(String itemId) {
+    final BuildContext? itemContext = _browserItemKeys[itemId]?.currentContext;
+    final BuildContext? pageContext = _pageBodyKey.currentContext;
+
+    if (itemContext == null || pageContext == null) {
+      return null;
+    }
+
+    final RenderObject? itemRenderObject = itemContext.findRenderObject();
+    final RenderObject? pageRenderObject = pageContext.findRenderObject();
+
+    if (itemRenderObject is! RenderBox || pageRenderObject is! RenderBox) {
+      return null;
+    }
+
+    final Offset itemGlobalTopLeft = itemRenderObject.localToGlobal(
+      Offset.zero,
+    );
+    return pageRenderObject.globalToLocal(itemGlobalTopLeft) &
+        itemRenderObject.size;
+  }
+
+  /*
+   * 获取浏览项展开动画在安全区域内的结束矩形。
+   */
+  Rect? _getBrowserOpenDestinationRect() {
+    final BuildContext? pageContext = _pageBodyKey.currentContext;
+
+    if (pageContext == null) {
+      return null;
+    }
+
+    final RenderObject? pageRenderObject = pageContext.findRenderObject();
+
+    if (pageRenderObject is! RenderBox) {
+      return null;
+    }
+
+    final EdgeInsets safePadding = MediaQuery.paddingOf(context);
+    return Rect.fromLTWH(
+      0,
+      safePadding.top,
+      pageRenderObject.size.width,
+      pageRenderObject.size.height - safePadding.top - safePadding.bottom,
+    );
   }
 
   /*
@@ -3922,13 +4334,20 @@ class _NoteHomePageState extends State<NoteHomePage>
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    Text(
-                      '笔记包',
-                      // 顶部标题文字样式
-                      style: TextStyle(
-                        color: _colors.onSurface,
-                        fontSize: 34,
-                        fontWeight: FontWeight.w800,
+                    Flexible(
+                      // 标题弹性占用剩余宽度，窄屏时等比缩小文字并为箭头保留空间。
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '笔记包',
+                          // 顶部标题文字样式
+                          style: TextStyle(
+                            color: _colors.onSurface,
+                            fontSize: 34,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
                     ),
                     Padding(
@@ -4179,9 +4598,9 @@ class _NoteHomePageState extends State<NoteHomePage>
               '全部笔记包',
               // 根路径文字样式
               style: TextStyle(
-                color: _colors.tertiary,
+                color: _colors.onSurfaceVariant,
                 fontSize: 14,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -4201,9 +4620,13 @@ class _NoteHomePageState extends State<NoteHomePage>
                 segments[index],
                 // 子路径文字样式
                 style: TextStyle(
-                  color: _colors.onSurfaceVariant,
+                  color: index == segments.length - 1
+                      ? _colors.tertiary
+                      : _colors.onSurfaceVariant,
                   fontSize: 14,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: index == segments.length - 1
+                      ? FontWeight.w700
+                      : FontWeight.w600,
                 ),
               ),
             ),
@@ -4277,6 +4700,133 @@ class _NoteHomePageState extends State<NoteHomePage>
             child: child,
           ),
         ),
+      ),
+    );
+  }
+
+  /*
+   * 构建浏览项展开动画中显示的原始卡片内容。
+   */
+  Widget _buildBrowserOpenTransitionSource(NoteGridItem item) {
+    if (item.type == NoteGridItemType.folder) {
+      return _activeViewMode == NoteViewMode.list
+          ? _buildFolderListRow(item)
+          : _buildFolderCard(item);
+    }
+
+    return _activeViewMode == NoteViewMode.list
+        ? _buildNoteListRow(item, isWideLayout: false)
+        : _buildNoteCard(item, isWideLayout: false);
+  }
+
+  /*
+   * 构建从浏览项位置展开到安全区域的页面覆盖动画。
+   */
+  Widget _buildBrowserOpenTransitionOverlay() {
+    final NoteGridItem? item = _browserOpenTransitionItem;
+    final Rect? startRect = _browserOpenTransitionStartRect;
+    final Rect? endRect = _browserOpenTransitionEndRect;
+
+    if (item == null || startRect == null || endRect == null) {
+      return const Positioned.fill(child: SizedBox.shrink());
+    }
+
+    return Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _browserOpenTransitionController,
+        child: _buildBrowserOpenTransitionSource(item),
+        builder: (BuildContext context, Widget? sourceCard) {
+          final double controllerValue = _browserOpenTransitionController.value;
+          final double normalizedExpansionProgress =
+              (controllerValue / _browserOpenCoveredProgress)
+                  .clamp(0.0, 1.0)
+                  .toDouble();
+          final double expansionProgress = Curves.easeOutCubic.transform(
+            normalizedExpansionProgress,
+          );
+          final double revealProgress =
+              ((controllerValue - _browserOpenCoveredProgress) /
+                      (1 - _browserOpenCoveredProgress))
+                  .clamp(0.0, 1.0)
+                  .toDouble();
+          final double sourceOpacity =
+              (1 - ((controllerValue - 0.10) / 0.34).clamp(0.0, 1.0))
+                  .toDouble();
+          final double overlayOpacity = 1 - revealProgress;
+          final Rect currentRect = Rect.lerp(
+            startRect,
+            endRect,
+            expansionProgress,
+          )!;
+          final double currentRadius = 18 * (1 - expansionProgress);
+          final BorderRadius currentBorderRadius = BorderRadius.circular(
+            currentRadius,
+          );
+          final Color currentSurfaceColor = Color.lerp(
+            _colors.surfaceContainerLowest,
+            item.type == NoteGridItemType.note
+                ? _colors.surfaceContainerLow
+                : _colors.surface,
+            expansionProgress,
+          )!;
+
+          return AbsorbPointer(
+            child: Stack(
+              children: <Widget>[
+                Positioned.fill(
+                  child: ColoredBox(
+                    // 展开期间的页面遮罩样式
+                    color: _colors.scrim.withValues(
+                      alpha: 0.10 * expansionProgress * overlayOpacity,
+                    ),
+                  ),
+                ),
+                Positioned.fromRect(
+                  rect: currentRect,
+                  child: Opacity(
+                    opacity: overlayOpacity,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        // 展开容器阴影与圆角样式
+                        borderRadius: currentBorderRadius,
+                        boxShadow: <BoxShadow>[
+                          BoxShadow(
+                            color: _colors.shadow.withValues(
+                              alpha: 0.16 * (1 - expansionProgress),
+                            ),
+                            blurRadius: 22 * (1 - expansionProgress),
+                            offset: Offset(0, 8 * (1 - expansionProgress)),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: currentBorderRadius,
+                        child: ColoredBox(
+                          // 展开容器背景样式
+                          color: currentSurfaceColor,
+                          child: Stack(
+                            children: <Widget>[
+                              Positioned(
+                                left: 0,
+                                top: 0,
+                                width: startRect.width,
+                                height: startRect.height,
+                                child: Opacity(
+                                  opacity: sourceOpacity,
+                                  child: sourceCard,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -4462,7 +5012,12 @@ class _NoteHomePageState extends State<NoteHomePage>
           return;
         }
 
-        _handleDirectoryChanged(item.locationText);
+        unawaited(
+          _handleOpenDirectory(
+            item,
+            isWideLayout: MediaQuery.of(context).size.width >= 980,
+          ),
+        );
       },
       onLongPressStart: (LongPressStartDetails details) {
         _startDraggingBrowserItem(item, details.globalPosition);
@@ -4561,7 +5116,9 @@ class _NoteHomePageState extends State<NoteHomePage>
         _finishPressingBrowserItem(item.id);
       },
       onTap: () {
-        _handleSelectNote(note, isWideLayout: isWideLayout);
+        unawaited(
+          _handleSelectNote(note, sourceItem: item, isWideLayout: isWideLayout),
+        );
       },
       onLongPressStart: (LongPressStartDetails details) {
         _startDraggingBrowserItem(item, details.globalPosition);
@@ -4597,29 +5154,16 @@ class _NoteHomePageState extends State<NoteHomePage>
               // 笔记包卡片内容纵向布局样式
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Row(
-                  // 笔记包卡片标题横向布局样式
-                  children: <Widget>[
-                    Icon(
-                      Icons.folder_copy_rounded,
-                      color: _colors.secondary,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        item.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        // 笔记包卡片标题样式
-                        style: TextStyle(
-                          color: _colors.onSurface,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  // 笔记包卡片标题样式
+                  style: TextStyle(
+                    color: _colors.onSurface,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -4681,7 +5225,12 @@ class _NoteHomePageState extends State<NoteHomePage>
           return;
         }
 
-        _handleDirectoryChanged(item.locationText);
+        unawaited(
+          _handleOpenDirectory(
+            item,
+            isWideLayout: MediaQuery.of(context).size.width >= 980,
+          ),
+        );
       },
       onLongPressStart: (LongPressStartDetails details) {
         _startDraggingBrowserItem(item, details.globalPosition);
@@ -4780,7 +5329,9 @@ class _NoteHomePageState extends State<NoteHomePage>
         _finishPressingBrowserItem(item.id);
       },
       onTap: () {
-        _handleSelectNote(note, isWideLayout: isWideLayout);
+        unawaited(
+          _handleSelectNote(note, sourceItem: item, isWideLayout: isWideLayout),
+        );
       },
       onLongPressStart: (LongPressStartDetails details) {
         _startDraggingBrowserItem(item, details.globalPosition);
@@ -4818,29 +5369,16 @@ class _NoteHomePageState extends State<NoteHomePage>
                 // 笔记包列表文字纵向布局样式
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Row(
-                    // 笔记包列表标题横向布局样式
-                    children: <Widget>[
-                      Icon(
-                        Icons.folder_copy_rounded,
-                        color: _colors.secondary,
-                        size: 22,
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Text(
-                          item.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          // 笔记包列表标题样式
-                          style: TextStyle(
-                            color: _colors.onSurface,
-                            fontSize: 19,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ],
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    // 笔记包列表标题样式
+                    style: TextStyle(
+                      color: _colors.onSurface,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -5304,203 +5842,271 @@ class _NoteHomePageState extends State<NoteHomePage>
     }
 
     final double screenWidth = MediaQuery.of(context).size.width;
-    final double drawerWidth = screenWidth < 400 ? screenWidth - 32 : 320;
+    // 手机端抽屉占屏幕的四分之三，较大屏幕限制宽度以保持文档列表紧凑。
+    final double drawerWidth = (screenWidth * 0.75)
+        .clamp(0.0, 320.0)
+        .toDouble();
 
     return Positioned.fill(
       child: IgnorePointer(
         ignoring: !_isPackageDrawerOpen,
         child: Stack(
           children: <Widget>[
-            AnimatedOpacity(
-              opacity: _isPackageDrawerOpen ? 1 : 0,
-              duration: const Duration(milliseconds: 180),
-              child: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _isPackageDrawerOpen = false;
-                  });
+            Positioned.fill(
+              child: ValueListenableBuilder<double>(
+                valueListenable: _packageDrawerDragOffset,
+                // 遮罩透明度独立刷新，复用点击区域。
+                builder: (BuildContext context, double offset, Widget? child) {
+                  return AnimatedOpacity(
+                    opacity: _isPackageDrawerOpen
+                        ? (1 + offset / drawerWidth).clamp(0.0, 1.0).toDouble()
+                        : 0,
+                    duration: _isPackageDrawerDragging
+                        ? Duration.zero
+                        : const Duration(milliseconds: 180),
+                    child: child,
+                  );
                 },
-                child: ColoredBox(
-                  // 文档抽屉遮罩样式
-                  color: _colors.scrim.withValues(alpha: 0.16),
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _isPackageDrawerOpen = false;
+                    });
+                  },
+                  child: ColoredBox(
+                    // 文档抽屉遮罩样式
+                    color: _colors.scrim.withValues(alpha: 0.16),
+                  ),
                 ),
               ),
             ),
             Align(
               alignment: Alignment.centerLeft,
-              child: AnimatedSlide(
-                offset: _isPackageDrawerOpen
-                    ? Offset.zero
-                    : const Offset(-1, 0),
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                child: Material(
-                  // 文档抽屉面板材质样式
-                  color: _colors.surfaceContainerLowest,
-                  elevation: 18,
-                  child: SizedBox(
-                    width: drawerWidth,
-                    height: double.infinity,
-                    child: Column(
-                      // 文档抽屉纵向布局样式
-                      children: <Widget>[
-                        Padding(
-                          // 文档抽屉标题栏边距样式
-                          padding: const EdgeInsets.fromLTRB(18, 18, 10, 12),
-                          child: Row(
-                            // 文档抽屉标题栏横向布局样式
-                            children: <Widget>[
-                              Icon(
-                                Icons.folder_open_rounded,
-                                color: _colors.secondary,
-                                size: 24,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _packageDrawerDragOffset,
+                // 拖动只更新合成位移，面板内容通过子组件复用。
+                builder: (BuildContext context, double offset, Widget? child) {
+                  return AnimatedSlide(
+                    offset: _isPackageDrawerOpen
+                        ? Offset(offset / drawerWidth, 0)
+                        : const Offset(-1, 0),
+                    duration: _isPackageDrawerDragging
+                        ? Duration.zero
+                        : const Duration(milliseconds: 160),
+                    curve: Curves.easeOutCubic,
+                    child: child,
+                  );
+                },
+                child: RepaintBoundary(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragStart: _handlePackageDrawerDragStart,
+                    onHorizontalDragUpdate: (DragUpdateDetails details) {
+                      _handlePackageDrawerDragUpdate(details, drawerWidth);
+                    },
+                    onHorizontalDragEnd: (DragEndDetails details) {
+                      _handlePackageDrawerDragEnd(details, drawerWidth);
+                    },
+                    onHorizontalDragCancel: _handlePackageDrawerDragCancel,
+                    child: Material(
+                      // 文档抽屉面板材质样式
+                      color: _colors.surfaceContainerLowest,
+                      elevation: 18,
+                      child: SizedBox(
+                        width: drawerWidth,
+                        height: double.infinity,
+                        child: Column(
+                          // 文档抽屉纵向布局样式
+                          children: <Widget>[
+                            Padding(
+                              // 文档抽屉标题栏边距样式
+                              padding: const EdgeInsets.fromLTRB(
+                                18,
+                                18,
+                                10,
+                                12,
                               ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  // 文档抽屉标题文字纵向布局样式
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      _activeNote!.packageName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      // 文档抽屉笔记包标题样式
-                                      style: TextStyle(
-                                        color: _colors.onSurface,
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w800,
+                              child: Column(
+                                // 窄抽屉标题与操作分行，文字区域使用弹性布局。
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  Row(
+                                    // 文档抽屉标题栏横向布局样式
+                                    children: <Widget>[
+                                      Icon(
+                                        Icons.folder_open_rounded,
+                                        color: _colors.secondary,
+                                        size: 24,
                                       ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${_activePackageNotes.length} 篇 Markdown',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      // 文档抽屉笔记包数量样式
-                                      style: TextStyle(
-                                        color: _colors.onSurfaceVariant,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Tooltip(
-                                message: '新建包内文档',
-                                child: IconButton(
-                                  onPressed: _isPackageDrawerLoading
-                                      ? null
-                                      : () {
-                                          _handleCreatePackageNote();
-                                        },
-                                  icon: const Icon(Icons.note_add_outlined),
-                                  color: _colors.onSurface,
-                                ),
-                              ),
-                              Tooltip(
-                                message: '收起文档列表',
-                                child: IconButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      _isPackageDrawerOpen = false;
-                                    });
-                                  },
-                                  icon: const Icon(Icons.chevron_left_rounded),
-                                  color: _colors.onSurface,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Divider(height: 1, color: _colors.outlineVariant),
-                        Expanded(
-                          child: _isPackageDrawerLoading
-                              ? Center(
-                                  child: CircularProgressIndicator(
-                                    color: _colors.primary,
-                                  ),
-                                )
-                              : ListView.separated(
-                                  // 文档抽屉列表边距样式
-                                  padding: const EdgeInsets.fromLTRB(
-                                    10,
-                                    10,
-                                    10,
-                                    18,
-                                  ),
-                                  itemCount: _activePackageNotes.length,
-                                  separatorBuilder:
-                                      (BuildContext context, int index) =>
-                                          const SizedBox(height: 4),
-                                  itemBuilder: (BuildContext context, int index) {
-                                    final NoteItem note =
-                                        _activePackageNotes[index];
-                                    final bool isActive =
-                                        note.relativePath ==
-                                        _activeNote!.relativePath;
-
-                                    return Material(
-                                      // 文档抽屉单项材质样式
-                                      color: isActive
-                                          ? _colors.primaryContainer
-                                          : Colors.transparent,
-                                      borderRadius: BorderRadius.circular(6),
-                                      child: InkWell(
-                                        onTap: () {
-                                          _handleSelectPackageNote(note);
-                                        },
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: Padding(
-                                          // 文档抽屉单项边距样式
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 10,
-                                          ),
-                                          child: Row(
-                                            // 文档抽屉单项横向布局样式
-                                            children: <Widget>[
-                                              Icon(
-                                                Icons.description_outlined,
-                                                color: isActive
-                                                    ? _colors.onPrimaryContainer
-                                                    : _colors.onSurfaceVariant,
-                                                size: 20,
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          // 文档抽屉标题文字纵向布局样式
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: <Widget>[
+                                            Text(
+                                              _activeNote!.packageName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              // 文档抽屉笔记包标题样式
+                                              style: TextStyle(
+                                                color: _colors.onSurface,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w800,
                                               ),
-                                              const SizedBox(width: 10),
-                                              Expanded(
-                                                child: Text(
-                                                  note.fileName,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  // 文档抽屉单项文件名样式
-                                                  style: TextStyle(
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${_activePackageNotes.length} 篇 Markdown',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              // 文档抽屉笔记包数量样式
+                                              style: TextStyle(
+                                                color: _colors.onSurfaceVariant,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    // 文档抽屉操作按钮靠右排列，保留完整点击区域。
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: <Widget>[
+                                      Tooltip(
+                                        message: '新建包内文档',
+                                        child: IconButton(
+                                          onPressed: _isPackageDrawerLoading
+                                              ? null
+                                              : () {
+                                                  _handleCreatePackageNote();
+                                                },
+                                          icon: const Icon(
+                                            Icons.note_add_outlined,
+                                          ),
+                                          color: _colors.onSurface,
+                                        ),
+                                      ),
+                                      Tooltip(
+                                        message: '收起文档列表',
+                                        child: IconButton(
+                                          onPressed: () {
+                                            setState(() {
+                                              _isPackageDrawerOpen = false;
+                                            });
+                                          },
+                                          icon: const Icon(
+                                            Icons.chevron_left_rounded,
+                                          ),
+                                          color: _colors.onSurface,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Divider(height: 1, color: _colors.outlineVariant),
+                            Expanded(
+                              child: _isPackageDrawerLoading
+                                  ? Center(
+                                      child: CircularProgressIndicator(
+                                        color: _colors.primary,
+                                      ),
+                                    )
+                                  : ListView.separated(
+                                      // 文档抽屉列表边距样式
+                                      padding: const EdgeInsets.fromLTRB(
+                                        10,
+                                        10,
+                                        10,
+                                        18,
+                                      ),
+                                      itemCount: _activePackageNotes.length,
+                                      separatorBuilder:
+                                          (BuildContext context, int index) =>
+                                              const SizedBox(height: 4),
+                                      itemBuilder: (BuildContext context, int index) {
+                                        final NoteItem note =
+                                            _activePackageNotes[index];
+                                        final bool isActive =
+                                            note.relativePath ==
+                                            _activeNote!.relativePath;
+
+                                        return Material(
+                                          // 文档抽屉单项材质样式
+                                          color: isActive
+                                              ? _colors.primaryContainer
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          child: InkWell(
+                                            onTap: () {
+                                              _handleSelectPackageNote(note);
+                                            },
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                            child: Padding(
+                                              // 文档抽屉单项边距样式
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 10,
+                                                  ),
+                                              child: Row(
+                                                // 文档抽屉单项横向布局样式
+                                                children: <Widget>[
+                                                  Icon(
+                                                    Icons.description_outlined,
                                                     color: isActive
                                                         ? _colors
                                                               .onPrimaryContainer
-                                                        : _colors.onSurface,
-                                                    fontSize: 15,
-                                                    fontWeight: FontWeight.w700,
+                                                        : _colors
+                                                              .onSurfaceVariant,
+                                                    size: 20,
                                                   ),
-                                                ),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: Text(
+                                                      note.fileName,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      // 文档抽屉单项文件名样式
+                                                      style: TextStyle(
+                                                        color: isActive
+                                                            ? _colors
+                                                                  .onPrimaryContainer
+                                                            : _colors.onSurface,
+                                                        fontSize: 15,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  if (isActive)
+                                                    Icon(
+                                                      Icons.check_rounded,
+                                                      color: _colors
+                                                          .onPrimaryContainer,
+                                                      size: 20,
+                                                    ),
+                                                ],
                                               ),
-                                              if (isActive)
-                                                Icon(
-                                                  Icons.check_rounded,
-                                                  color: _colors
-                                                      .onPrimaryContainer,
-                                                  size: 20,
-                                                ),
-                                            ],
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -5843,6 +6449,7 @@ class _NoteHomePageState extends State<NoteHomePage>
       child: Scaffold(
         backgroundColor: _colors.surface,
         body: Stack(
+          key: _pageBodyKey,
           // 页面内容与系统底部安全区背景分层布局样式
           children: <Widget>[
             Positioned.fill(
@@ -5866,10 +6473,13 @@ class _NoteHomePageState extends State<NoteHomePage>
                 ),
               ),
             ),
+            _buildBrowserOpenTransitionOverlay(),
           ],
         ),
         floatingActionButton:
-            _isSelectionMode || (!isWideLayout && !_isCompactBrowserVisible)
+            _isSelectionMode ||
+                _browserOpenTransitionItem != null ||
+                (!isWideLayout && !_isCompactBrowserVisible)
             ? null
             : FloatingActionButton(
                 tooltip: '新建笔记包',

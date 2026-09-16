@@ -19,6 +19,21 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
 /*
+ * 关于弹窗使用的文档时间和笔记包磁盘统计信息。
+ */
+typedef NoteInformation = ({
+  DateTime documentCreatedAt,
+  bool documentCreatedAtEstimated,
+  DateTime documentUpdatedAt,
+  DateTime packageCreatedAt,
+  bool packageCreatedAtEstimated,
+  DateTime packageUpdatedAt,
+  int fileCount,
+  int documentCount,
+  int totalBytes,
+});
+
+/*
  * 笔记包存储服务。
  *
  * 页面调用这里的方法加载、保存、移动和删除笔记包及其 Markdown 文档。
@@ -161,21 +176,154 @@ class NoteStorageService {
    */
   Future<void> writePackageMetadata(
     Directory packageDirectory,
-    String entryFileName,
-  ) async {
-    final File metadataFile = File(
-      '${packageDirectory.path}${Platform.pathSeparator}$packageMetadataFileName',
+    String entryFileName, {
+    String? createdDocumentName,
+  }) async {
+    final Map<String, dynamic>? previous = await readPackageMetadata(
+      packageDirectory,
     );
-    const JsonEncoder encoder = JsonEncoder.withIndent('  ');
-    final Map<String, dynamic> metadata = <String, dynamic>{
-      'schema': packageMetadataSchema,
-      'kind': packageMetadataKind,
-      'entry': path.posix.basename(entryFileName.replaceAll('\\', '/')),
-    };
+    final Map<String, dynamic> metadata =
+        previous ??
+        <String, dynamic>{
+          'schema': packageMetadataSchema,
+          'kind': packageMetadataKind,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'createdAtEstimated': false,
+        };
+    // 旧笔记在切换入口前先保留可用的历史时间，避免本次元数据写入影响估算。
+    if (DateTime.tryParse(metadata['createdAt']?.toString() ?? '') == null) {
+      metadata['createdAt'] = (await File(
+        path.join(packageDirectory.path, packageMetadataFileName),
+      ).stat()).modified.toUtc().toIso8601String();
+      metadata['createdAtEstimated'] = true;
+    }
+    metadata['entry'] = path.posix.basename(
+      entryFileName.replaceAll('\\', '/'),
+    );
+    if (createdDocumentName != null) {
+      final Map<String, dynamic> documents = Map<String, dynamic>.from(
+        metadata['documents'] is Map ? metadata['documents'] as Map : {},
+      );
+      documents[createdDocumentName] = <String, dynamic>{
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+        'createdAtEstimated': false,
+      };
+      metadata['documents'] = documents;
+    }
+    await _savePackageMetadata(packageDirectory, metadata);
+  }
 
-    await metadataFile.writeAsString(
-      '${encoder.convert(metadata)}\n',
+  /*
+   * 以 UTF-8 保存完整元数据，保留创建时间及未来扩展字段。
+   */
+  Future<void> _savePackageMetadata(
+    Directory directory,
+    Map<String, dynamic> metadata,
+  ) async {
+    await File(
+      path.join(directory.path, packageMetadataFileName),
+    ).writeAsString(
+      '${const JsonEncoder.withIndent('  ').convert(metadata)}\n',
+      encoding: utf8,
       flush: true,
+    );
+  }
+
+  /*
+   * 补录旧笔记的创建时间；文件修改时间仅作估算，一经记录不随保存变化。
+   */
+  Future<Map<String, dynamic>> _ensureCreationTimes(
+    Directory directory,
+    File document,
+  ) async {
+    final Map<String, dynamic>? metadata = await readPackageMetadata(directory);
+    if (metadata == null) {
+      throw Exception('当前 Markdown 不属于有效笔记包');
+    }
+    bool changed = false;
+    if (DateTime.tryParse(metadata['createdAt']?.toString() ?? '') == null) {
+      metadata['createdAt'] = (await File(
+        path.join(directory.path, packageMetadataFileName),
+      ).stat()).modified.toUtc().toIso8601String();
+      metadata['createdAtEstimated'] = true;
+      changed = true;
+    }
+    final Map<String, dynamic> documents = Map<String, dynamic>.from(
+      metadata['documents'] is Map ? metadata['documents'] as Map : {},
+    );
+    final String name = path.basename(document.path);
+    if (documents[name] is! Map ||
+        DateTime.tryParse(documents[name]['createdAt']?.toString() ?? '') ==
+            null) {
+      documents[name] = <String, dynamic>{
+        'createdAt': (await document.stat()).modified.toUtc().toIso8601String(),
+        'createdAtEstimated': true,
+      };
+      metadata['documents'] = documents;
+      changed = true;
+    }
+    if (changed) {
+      await _savePackageMetadata(directory, metadata);
+    }
+    return metadata;
+  }
+
+  /*
+   * 读取当前文档时间并递归统计笔记包文件，符号链接不计入以避免越界和重复。
+   */
+  Future<NoteInformation> getNoteInformation(NoteItem note) async {
+    final Directory directory = await getDirectoryByRelativePath(
+      note.packageRelativePath,
+    );
+    final File document = await getNoteFileByRelativePath(note.relativePath);
+    final Map<String, dynamic> metadata = await _ensureCreationTimes(
+      directory,
+      document,
+    );
+    final Map documentMetadata = metadata['documents'][note.fileName] as Map;
+    final FileStat documentStat = await document.stat();
+    DateTime updatedAt = documentStat.modified;
+    int fileCount = 0;
+    int documentCount = 0;
+    int totalBytes = 0;
+    await for (final FileSystemEntity entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is! File) {
+        continue;
+      }
+      final FileStat stat = await entity.stat();
+      fileCount += 1;
+      totalBytes += stat.size;
+      if (path.extension(entity.path).toLowerCase() == '.md' &&
+          path.equals(entity.parent.path, directory.path)) {
+        documentCount += 1;
+      }
+      // 元数据补录和切换入口不视为笔记内容修改。
+      if (!path.equals(
+            entity.path,
+            path.join(directory.path, packageMetadataFileName),
+          ) &&
+          stat.modified.isAfter(updatedAt)) {
+        updatedAt = stat.modified;
+      }
+    }
+    return (
+      documentCreatedAt: DateTime.parse(
+        documentMetadata['createdAt'] as String,
+      ).toLocal(),
+      documentCreatedAtEstimated:
+          documentMetadata['createdAtEstimated'] == true,
+      documentUpdatedAt: documentStat.modified.toLocal(),
+      packageCreatedAt: DateTime.parse(
+        metadata['createdAt'] as String,
+      ).toLocal(),
+      packageCreatedAtEstimated: metadata['createdAtEstimated'] == true,
+      packageUpdatedAt: updatedAt.toLocal(),
+      fileCount: fileCount,
+      documentCount: documentCount,
+      totalBytes: totalBytes,
     );
   }
 
@@ -188,6 +336,10 @@ class NoteStorageService {
     Directory noteDirectory,
     Directory packageDirectory,
   ) async {
+    final Map<String, dynamic> metadata = await _ensureCreationTimes(
+      packageDirectory,
+      file,
+    );
     final FileStat fileStat = await file.stat();
     final String relativePath = path
         .relative(file.path, from: noteDirectory.path)
@@ -204,10 +356,15 @@ class NoteStorageService {
       packageRelativePath: packageRelativePath,
       packageName: path.posix.basename(packageRelativePath),
       directoryPath: parentDirectoryPath == '.' ? '' : parentDirectoryPath,
-      title: extractNoteTitle(content),
+      // 空白文档使用实际文件名，避免新建时显示为“未命名笔记”。
+      title: stripMarkdownSyntax(content).isEmpty
+          ? path.basenameWithoutExtension(file.path)
+          : extractNoteTitle(content),
       preview: extractNotePreview(content),
       content: content,
-      createdAt: fileStat.changed,
+      createdAt: DateTime.parse(
+        metadata['documents'][path.basename(file.path)]['createdAt'] as String,
+      ).toLocal(),
       updatedAt: fileStat.modified,
       tags: extractNoteTags(content),
     );
@@ -485,7 +642,11 @@ class NoteStorageService {
     await packageDirectory.create(recursive: true);
     await documentFile.writeAsString(content, flush: true);
     // 元数据最后写入，只有结构完整的文件夹才会被应用识别为笔记包。
-    await writePackageMetadata(packageDirectory, documentFileName);
+    await writePackageMetadata(
+      packageDirectory,
+      documentFileName,
+      createdDocumentName: documentFileName,
+    );
 
     return createNoteItem(
       documentFile,
@@ -539,14 +700,19 @@ class NoteStorageService {
       throw Exception('目标文件夹不是有效笔记包');
     }
 
-    final String content = createInitialNoteContent('新建文档');
+    // 只保留空的一级标题结构，不预填标题文字或正文。
+    const String content = '# \n';
     final File targetFile = await createAvailableFile(
-      File(
-        '${packageDirectory.path}${Platform.pathSeparator}${createFileNameFromTitle(extractNoteTitle(content))}',
-      ),
+      File('${packageDirectory.path}${Platform.pathSeparator}新建文档.md'),
+      useUnderscoreSuffix: true,
     );
 
-    await targetFile.writeAsString(content, flush: true);
+    await targetFile.writeAsString(content, encoding: utf8, flush: true);
+    await writePackageMetadata(
+      packageDirectory,
+      (await readPackageMetadata(packageDirectory))!['entry'] as String,
+      createdDocumentName: path.basename(targetFile.path),
+    );
     return createNoteItem(targetFile, content, noteDirectory, packageDirectory);
   }
 
@@ -579,17 +745,15 @@ class NoteStorageService {
     final Directory noteDirectory = await getNoteDirectory();
     final File file = await getNoteFileByRelativePath(relativePath);
     final Directory packageDirectory = file.parent;
-    final Map<String, dynamic>? metadata = await readPackageMetadata(
+    final Map<String, dynamic> metadata = await _ensureCreationTimes(
       packageDirectory,
+      file,
     );
 
-    if (metadata == null) {
-      throw Exception('当前 Markdown 不属于有效笔记包');
-    }
-
-    final String nextFileName = createFileNameFromTitle(
-      extractNoteTitle(content),
-    );
+    // 尚未输入内容时保留新建名称及序号，避免自动保存改变空文档名称。
+    final String nextFileName = stripMarkdownSyntax(content).isEmpty
+        ? path.basename(file.path)
+        : createFileNameFromTitle(extractNoteTitle(content));
     File targetFile = file;
 
     if (fileNameNeedsRename(path.basename(file.path), nextFileName)) {
@@ -604,12 +768,18 @@ class NoteStorageService {
     }
 
     await targetFile.writeAsString(content, flush: true);
-    if (metadata['entry'] == path.basename(file.path) &&
-        path.basename(targetFile.path) != path.basename(file.path)) {
-      await writePackageMetadata(
-        packageDirectory,
-        path.basename(targetFile.path),
+    if (path.basename(targetFile.path) != path.basename(file.path)) {
+      final Map<String, dynamic> documents = Map<String, dynamic>.from(
+        metadata['documents'] as Map,
       );
+      documents[path.basename(targetFile.path)] = documents.remove(
+        path.basename(file.path),
+      );
+      metadata['documents'] = documents;
+      if (metadata['entry'] == path.basename(file.path)) {
+        metadata['entry'] = path.basename(targetFile.path);
+      }
+      await _savePackageMetadata(packageDirectory, metadata);
     }
 
     return createNoteItem(targetFile, content, noteDirectory, packageDirectory);
@@ -937,6 +1107,13 @@ class NoteStorageService {
       await writePackageMetadata(packageDirectory, nextEntryNote.fileName);
     }
     await documentFile.delete();
+    final Map<String, dynamic> remainingMetadata = (await readPackageMetadata(
+      packageDirectory,
+    ))!;
+    if (remainingMetadata['documents'] is Map) {
+      (remainingMetadata['documents'] as Map).remove(currentNote.fileName);
+      await _savePackageMetadata(packageDirectory, remainingMetadata);
+    }
 
     for (final String resourcePath in currentResourcePaths.difference(
       remainingResourcePaths,
@@ -984,6 +1161,7 @@ class NoteStorageService {
   Future<File> createAvailableFile(
     File targetFile, {
     String? preferredSourcePath,
+    bool useUnderscoreSuffix = false,
   }) async {
     if (!await targetFile.exists() || targetFile.path == preferredSourcePath) {
       return targetFile;
@@ -992,11 +1170,12 @@ class NoteStorageService {
     final String directoryPath = targetFile.parent.path;
     final String baseName = path.basenameWithoutExtension(targetFile.path);
     final String extension = path.extension(targetFile.path);
-    int index = 1;
+    // 新建子文档采用从 2 开始的下划线序号，其他操作维持原有命名规则。
+    int index = useUnderscoreSuffix ? 2 : 1;
 
     while (true) {
       final File candidateFile = File(
-        '$directoryPath${Platform.pathSeparator}$baseName-$index$extension',
+        '$directoryPath${Platform.pathSeparator}$baseName${useUnderscoreSuffix ? '_$index' : '-$index'}$extension',
       );
       if (!await candidateFile.exists() ||
           candidateFile.path == preferredSourcePath) {

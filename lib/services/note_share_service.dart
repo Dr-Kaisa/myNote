@@ -10,6 +10,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as image_lib;
 import 'package:my_note/models/note_item.dart';
@@ -159,6 +160,23 @@ Uint8List _buildLongShareImage(List<_CapturedSharePage> pages) {
 }
 
 /*
+ * 在后台仅根据路径压缩笔记包，避免把页面状态或回调传入隔离区。
+ */
+void _writePackageZip((String, String) paths) {
+  final ZipFileEncoder encoder = ZipFileEncoder();
+  encoder.create(paths.$2);
+  try {
+    encoder.addDirectorySync(
+      Directory(paths.$1),
+      includeDirName: true,
+      followLinks: false,
+    );
+  } finally {
+    encoder.closeSync();
+  }
+}
+
+/*
  * 笔记分享服务。
  */
 class NoteShareService {
@@ -178,8 +196,11 @@ class NoteShareService {
    */
   Future<void> shareMarkdownText(
     NoteItem note,
-    Rect? sharePositionOrigin,
-  ) async {
+    Rect? sharePositionOrigin, {
+    VoidCallback? onPrepared,
+  }) async {
+    // 内容就绪后结束生成提示，系统分享结果可以继续等待用户选择。
+    onPrepared?.call();
     await SharePlus.instance.share(
       ShareParams(
         text: note.content.isEmpty ? ' ' : note.content,
@@ -195,8 +216,9 @@ class NoteShareService {
    */
   Future<void> sharePackageFiles(
     NoteItem note,
-    Rect? sharePositionOrigin,
-  ) async {
+    Rect? sharePositionOrigin, {
+    VoidCallback? onPrepared,
+  }) async {
     final Directory packageDirectory = await _noteStorageService
         .getDirectoryByRelativePath(note.packageRelativePath);
     final Directory exportDirectory = await _createExportDirectory();
@@ -206,22 +228,10 @@ class NoteShareService {
         '${_sanitizeFileName(note.packageName)}.zip',
       ),
     );
-    final String packageDirectoryPath = packageDirectory.path;
-    final String zipFilePath = zipFile.path;
-    await Isolate.run(() {
-      final ZipFileEncoder encoder = ZipFileEncoder();
-      encoder.create(zipFilePath);
-      try {
-        encoder.addDirectorySync(
-          Directory(packageDirectoryPath),
-          includeDirName: true,
-          followLinks: false,
-        );
-      } finally {
-        encoder.closeSync();
-      }
-    });
+    await compute(_writePackageZip, (packageDirectory.path, zipFile.path));
 
+    // 内容就绪后结束生成提示，系统分享结果可以继续等待用户选择。
+    onPrepared?.call();
     await SharePlus.instance.share(
       ShareParams(
         files: <XFile>[XFile(zipFile.path, mimeType: 'application/zip')],
@@ -238,8 +248,9 @@ class NoteShareService {
   Future<void> shareAsImages(
     NoteItem note,
     NoteSharePageCapture capturePages,
-    Rect? sharePositionOrigin,
-  ) async {
+    Rect? sharePositionOrigin, {
+    VoidCallback? onPrepared,
+  }) async {
     final Directory exportDirectory = await _createExportDirectory();
     final String baseName = _sanitizeFileName(
       path.basenameWithoutExtension(note.fileName),
@@ -257,6 +268,8 @@ class NoteShareService {
       flush: true,
     );
 
+    // 内容就绪后结束生成提示，系统分享结果可以继续等待用户选择。
+    onPrepared?.call();
     await SharePlus.instance.share(
       ShareParams(
         files: <XFile>[XFile(imageFile.path, mimeType: 'image/png')],
@@ -273,8 +286,9 @@ class NoteShareService {
   Future<void> shareAsPdf(
     NoteItem note,
     NoteSharePageCapture capturePages,
-    Rect? sharePositionOrigin,
-  ) async {
+    Rect? sharePositionOrigin, {
+    VoidCallback? onPrepared,
+  }) async {
     final pw.Document document = pw.Document();
     int pageCount = 0;
 
@@ -313,6 +327,8 @@ class NoteShareService {
       flush: true,
     );
 
+    // 内容就绪后结束生成提示，系统分享结果可以继续等待用户选择。
+    onPrepared?.call();
     await SharePlus.instance.share(
       ShareParams(
         files: <XFile>[XFile(pdfFile.path, mimeType: 'application/pdf')],
